@@ -19,10 +19,10 @@
 #define DEBUG // Uncomment to debug
 #include "log.h"
 
-/* Thread‑local pointer to the current exception frame */
+// Thread‑local pointer to the current exception frame
 _Thread_local gc_exception_t *gc_current_exception = NULL;
 
-/* Global lock for protecting exception code writes (paranoid, but works) */
+// Global lock for protecting exception code writes (paranoid, but works)
 static gc_mutex_t *gc_exception_lock = &GC_PTHREAD_MUTEX_INITIALIZER;
 
 /* ---------- gc_throw ---------- */
