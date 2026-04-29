@@ -31,11 +31,11 @@ void gc_throw(int code) {
         LOG_FATAL("throw without a TRY block\n");
     }
 
-    /* Set the exception code under a brief lock */
+    // Set the exception code under a brief lock
     gc_pthread_mutex_lock(gc_exception_lock);
     gc_current_exception->code = code;
     gc_pthread_mutex_unlock(gc_exception_lock);
 
-    /* Jump back to the matching TRY */
+    // Jump back to the matching TRY
     siglongjmp(gc_current_exception->buf, 1);
 }
