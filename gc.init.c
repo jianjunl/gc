@@ -105,6 +105,7 @@ void gc_init(void) {
 #if GC_MULTITHREAD
     gc_register_thread_stack(gc_stack_bottom);
 #endif // GC_MULTITHREAD
+    gc_add_root(&gc_current_exception);
     gc_initialized = true;
     LOG_DEBUG("GC initialised, threshold = %zu bytes", gc_threshold);
 }
