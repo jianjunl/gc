@@ -1,0 +1,260 @@
+.TH GC 3 "2026-04-29" "libgc 1.0" "Library Functions Manual"
+.SH NAME
+gc \- conservative garbage collector for C
+.SH SYNOPSIS
+.nf
+.B #include <gc.h>
+
+.BI "void gc_init(void);"
+.BI "void gc_dump_stats(void);"
+
+.BI "void *gc_malloc(size_t " size ");"
+.BI "void *gc_calloc(size_t " nmemb ", size_t " size ");"
+.BI "void gc_free(void *" ptr ");"
+.BI "void gc_collect(void);"
+
+.BI "void gc_add_root(void *" ptr_addr ");"
+.BI "void gc_remove_root(void *" ptr_addr ");"
+.BI "void gc_root_cleanup(void **" ptr_addr ");"
+
+.BI "gc_weak_ref_t *gc_make_weak(void *" obj ", void (*" on_clear ")(void *, void *), void *" user_data ");"
+.BI "void *gc_weak_get(gc_weak_ref_t *" ref ");"
+.BI "void gc_weak_free(gc_weak_ref_t *" ref ");"
+.BI "void gc_register_finalizer(void *" obj ", void (*" finalizer ")(void *, void *), void *" user_data ");"
+
+.BI "int gc_pthread_create(pthread_t *" thread ", const pthread_attr_t *" attr ", void *(*" start ")(void *), void *" arg ");"
+.BI "int gc_pthread_join(pthread_t " thread ", void **" retval ");"
+.BI "void gc_pthread_exit(void *" retval ");"
+.BI "void gc_register_thread_stack(void *" stack_bottom ");"
+.BI "void gc_unregister_thread(void);"
+
+.BI "int gc_pthread_mutex_init(gc_mutex_t **" mutex ", const pthread_mutexattr_t *" attr ");"
+.BI "int gc_pthread_mutex_lock(gc_mutex_t *" mutex ");"
+.BI "int gc_pthread_mutex_unlock(gc_mutex_t *" mutex ");"
+.BI "int gc_pthread_mutex_destroy(gc_mutex_t *" mutex ");"
+.BI "int gc_pthread_cond_init(gc_cond_t **" cond ", const pthread_condattr_t *" attr ");"
+.BI "int gc_pthread_cond_wait(gc_cond_t *" cond ", gc_mutex_t *" mutex ");"
+.BI "int gc_pthread_cond_signal(gc_cond_t *" cond ");"
+.BI "int gc_pthread_cond_broadcast(gc_cond_t *" cond ");"
+.BI "int gc_pthread_cond_destroy(gc_cond_t *" cond ");"
+
+.B typedef struct gc_exception gc_exception_t;
+.BI "void gc_throw(int " code ");"
+
+.BI "void gc_write_barrier(void *" container_or_field ", void *" val ");"
+.fi
+.SH DESCRIPTION
+The
+.B gc
+library provides a conservative, stop-the-world, mark-and-sweep garbage
+collector for C. It can be used as a drop-in replacement for
+.BR malloc (3)
+and
+.BR calloc (3)
+in both single-threaded and multi-threaded programs.
+
+The collector is conservative: it treats any word-aligned value on the
+stack, in registers, or in the data segment that points into a managed
+heap block as a live reference. False positives are possible but rare
+and do not compromise safety.
+
+Multi-threading is supported via a stop-the-world mechanism using POSIX
+signals. Threads created with
+.BR gc_pthread_create (3)
+are automatically registered and scanned.
+
+The library also provides GC-aware replacements for
+.BR setjmp (3)
+/
+.BR longjmp (3)
+via a
+.B try/throw/catch
+macro system, as well as GC-managed mutex and condition variable
+wrappers.
+
+.SS Initialization and Statistics
+The collector initializes itself automatically on the first call to
+.BR gc_malloc ()
+or
+.BR gc_calloc ().
+Explicit initialization via
+.BR gc_init ()
+is optional but harmless.
+
+.BR gc_dump_stats ()
+prints internal state (bytes allocated, number of blocks, threshold)
+to
+.IR stderr .
+
+.SS Memory Allocation
+.BR gc_malloc ()
+allocates
+.I size
+bytes and returns a pointer to the memory. The memory is not initialized.
+
+.BR gc_calloc ()
+allocates space for
+.I nmemb
+elements of
+.I size
+bytes each, initializes the memory to zero, and returns a pointer.
+
+.BR gc_free ()
+is provided for compatibility but does nothing – the collector decides
+when to reclaim memory.
+
+.BR gc_collect ()
+forces an immediate garbage collection cycle. All threads are paused,
+roots are scanned, and unreachable blocks are freed.
+
+.SS Precise Roots
+By default, the collector scans the stack, registers, and data segment
+conservatively. To guarantee that a particular pointer is treated as a
+root (e.g., to overcome false negatives or for global variables in
+dynamic libraries), use
+.BR gc_add_root ().
+The address of a pointer variable is passed; the pointer stored at that
+address will be treated as a root. Use
+.BR gc_remove_root ()
+to cancel the protection.
+The macro
+.B GC_ROOT(type, name)
+declares a pointer, registers it as a root, and arranges automatic
+cleanup at scope exit (requires GCC or Clang).
+
+.SS Finalizers and Weak References
+.BR gc_register_finalizer ()
+schedules a function to be called just before a GC-managed object is
+freed.
+
+.BR gc_make_weak ()
+creates a weak reference to an object, allowing the user to check
+whether the object is still alive without preventing its collection.
+.BR gc_weak_get ()
+returns the original pointer or
+.I NULL
+if the object has been collected. The reference must be destroyed with
+.BR gc_weak_free ().
+
+.SS Exception Handling
+The library provides a simple
+.B try/throw/catch
+mechanism based on
+.BR sigsetjmp (3)
+/
+.BR siglongjmp (3).
+Each thread maintains its own exception context.
+
+.RS
+.TP
+.B TRY
+Begins a guarded block. Must be followed by a
+.B CATCH
+block.
+.TP
+.B CATCH
+Handles exceptions thrown inside the preceding
+.B TRY
+block. The exception code is available in
+.BR gc_current_exception->code .
+.TP
+.B THROW(code)
+Jumps to the innermost
+.B CATCH
+with the given code.
+.TP
+.B END_TRY
+Placed after the
+.B CATCH
+block to clean up the environment.
+.RE
+
+.SS Thread Support
+.BR gc_pthread_create ()
+is a wrapper around
+.BR pthread_create (3)
+that registers the new thread with the collector.
+
+.BR gc_pthread_join ()
+is equivalent to
+.BR pthread_join (3).
+
+.BR gc_pthread_exit ()
+unregisters the calling thread and then calls
+.BR pthread_exit (3).
+
+.BR gc_register_thread_stack ()
+and
+.BR gc_unregister_thread ()
+allow manual registration of threads created by other means.
+
+.SS Synchronization Primitives
+.B gc_mutex_t
+and
+.B gc_cond_t
+are either GC-managed structures (when
+.B GC_FINALIZING
+is enabled) or simple typedefs to the system types (otherwise).
+In the GC-managed case they are allocated in GC memory and carry
+finalizers that destroy the underlying pthread objects automatically.
+Otherwise they behave exactly like standard
+.BR pthread_mutex_t
+/
+.BR pthread_cond_t .
+
+.SS Write Barrier (Incremental Marking)
+When incremental marking is enabled
+.RB ( GC_INCREMENTAL " = 1),"
+the mutator must inform the collector of pointer updates to prevent
+the lost-object problem. The macro
+.B GC_WRITE_BARRIER(src, val)
+should be called before storing a new pointer into an object.
+A convenience macro
+.B GC_ASSIGN_PTR(lhs, rhs)
+performs the write barrier and the assignment in one step.
+
+.SH RETURN VALUES
+.BR gc_malloc ()
+and
+.BR gc_calloc ()
+return a pointer to the allocated memory, or
+.I NULL
+if the request cannot be satisfied.
+
+.BR gc_make_weak ()
+returns a handle, or
+.I NULL
+on failure.
+
+.BR gc_pthread_create ()
+and
+.BR gc_pthread_join ()
+return 0 on success or an error code on failure.
+Synchronization init functions return 0 or an error code.
+
+.BR gc_throw ()
+does not return.
+
+.SH NOTES
+The collector currently relies on Linux-specific features:
+.IR /proc/self/maps
+for stack detection,
+.BR getcontext (3)
+for register snapshots, and
+.B SIGUSR1 / SIGUSR2
+for stop-the-world synchronization. Porting to other operating systems
+requires adapting these parts.
+
+By default, a collection is triggered when the total allocated bytes
+exceed 4 MiB. This threshold grows dynamically if memory pressure
+remains high after a collection.
+
+.SH SEE ALSO
+.BR malloc (3),
+.BR pthread_create (3),
+.BR setjmp (3)
+.SH AUTHORS
+Developed by jianjunliu@126.com with assistance from DeepSeek.
+See the source code and
+.B README.md
+for full credits.
