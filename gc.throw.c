@@ -40,12 +40,13 @@ void gc_throw(int code) {
     siglongjmp(gc_current_exception->buf, 1);
 }
 
-/* ---------- gc_throw ---------- */
-void gc_caught(int code) {
+/* ---------- gc_throw_thrown ---------- */
+void gc_throw_thrown(void) {
     if (!gc_current_exception) {
         LOG_FATAL("throw without a TRY block\n");
     }
 
+    int code = gc_current_exception->code;
     gc_current_exception = gc_current_exception->prev;
     if(!gc_current_exception) {
         // Set the exception code under a brief lock
