@@ -39,3 +39,21 @@ void gc_throw(int code) {
     // Jump back to the matching TRY
     siglongjmp(gc_current_exception->buf, 1);
 }
+
+/* ---------- gc_throw ---------- */
+void gc_caught(int code) {
+    if (!gc_current_exception) {
+        LOG_FATAL("throw without a TRY block\n");
+    }
+
+    gc_current_exception = gc_current_exception->prev;
+    if(!gc_current_exception) {
+        // Set the exception code under a brief lock
+        gc_pthread_mutex_lock(gc_exception_lock);
+        gc_current_exception->code = code;
+        gc_pthread_mutex_unlock(gc_exception_lock);
+
+        // Jump back to the matching TRY
+        siglongjmp(gc_current_exception->buf, 1);
+    }
+}
