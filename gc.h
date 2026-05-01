@@ -27,11 +27,11 @@ extern "C" {
  * Configuration Macros (define before including this header)
  * ------------------------------------------------------------------------- */
 #ifndef GC_OPT_MULTITHREAD
-#define GC_OPT_MULTITHREAD 0 /* set to 0 to disable multi-threading */
+#define GC_OPT_MULTITHREAD 1 /* set to 0 to disable multi-threading */
 #endif
 
 #ifndef GC_OPT_INCREMENTAL
-#define GC_OPT_INCREMENTAL 0 /* set to 1 to enable incremental marking */
+#define GC_OPT_INCREMENTAL 1 /* set to 1 to enable incremental marking */
 #endif
 
 #ifndef GC_OPT_FINALIZING
@@ -39,7 +39,7 @@ extern "C" {
 #endif
 
 #ifndef GC_OPT_FREELIST
-#define GC_OPT_FREELIST    0
+#define GC_OPT_FREELIST    1
 #endif
 
 #define GC_MASK(x, n) ((x) << (n))
