@@ -265,6 +265,7 @@ extern _Thread_local gc_exception_t *gc_current_exception;
  * CATCH – immediately follows the TRY block and is executed when an
  *         exception is thrown inside the TRY block.
  * THROW(e) – throw an exception with code e.
+ * THROWN   – current exception code i.e. gc_current_exception->code).
  *
  * Example:
  *   TRY {
@@ -272,8 +273,27 @@ extern _Thread_local gc_exception_t *gc_current_exception;
  *       THROW(42);
  *   }
  *   CATCH {
- *       printf("caught %d\n", gc_current_exception->code);
+ *       printf("caught %d\n", THROWN);
  *   }
+ *
+ * THROW_THROWN() – THROW(THROWN) to outer TRY (used in CATCH block).
+ *
+ * Example:
+ *   TRY {
+ *       // guarded code
+ *       TRY {
+ *           // guarded code
+ *           THROW(42);
+ *       }
+ *       CATCH {
+ *           printf("caught %d\n", THROWN);
+ *           THROW_THROWN();
+ *       }
+ *   }
+ *   CATCH {
+ *       printf("caught %d\n", THROWN);
+ *   }
+ *
  */
 #define TRY \
     do { \
@@ -290,9 +310,9 @@ extern _Thread_local gc_exception_t *gc_current_exception;
         gc_current_exception = gc_exc.prev; \
     } while (0)
 
+#define THROWN gc_current_exception->code
 #define THROW(code) gc_throw(code)
 #define THROW_THROWN(void) gc_throw_thrown()
-#define THROWN gc_current_exception->code
 
 /* Prototype */
 void gc_throw(int code);
