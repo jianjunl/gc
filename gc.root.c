@@ -1,7 +1,7 @@
 /* ============================================================
  * gc.root.c - Precise root management
  *
- * Implements gc_add_root, gc_remove_root, gc_root_cleanup, and
+ * Implements gc_add_root, gc_remove_root, gc_(un)root_cleanup, and
  * gc_root_malloc.  Precise roots protect specific pointer variables
  * from being missed by conservative stack scanning.
  *
@@ -62,13 +62,3 @@ void gc_remove_root(void *ptr) {
 void gc_root_cleanup(void **ptr_addr) {
     if (ptr_addr) gc_remove_root(ptr_addr);
 }
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wreturn-local-addr"
-void **gc_root_malloc(size_t size) {
-    void *m = gc_malloc(size);
-    if (!m) return NULL;
-    gc_add_root(&m);
-    return &m;
-}
-#pragma GCC diagnostic pop

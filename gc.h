@@ -120,10 +120,7 @@ void* gc_calloc(size_t nmemb, size_t size);
  * because other references may still exist. This function is provided
  * for compatibility and debugging; it currently does nothing.
  */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
 void gc_free(void *ptr);
-#pragma GCC diagnostic pop
 
 /*
  * gc_collect - Force a full garbage collection cycle.
@@ -164,7 +161,7 @@ void gc_add_root(void *ptr_addr);
 void gc_remove_root(void *ptr_addr);
 
 /*
- * GC_ROOT - Convenience macro for stack-allocated precise roots.
+ * GC_ROOT -  declare ptr for stack-allocated precise roots.
  *
  * Usage:
  *   GC_ROOT(node_t, my_list) = gc_malloc(sizeof(node_t));
@@ -174,12 +171,23 @@ void gc_remove_root(void *ptr_addr);
  * unregistered when the variable goes out of scope (using GCC's cleanup
  * attribute). Requires GCC or Clang.
  */
-#define GC_ROOT(type, name) \
-    type * name __attribute__((cleanup(gc_root_cleanup))) = NULL; \
-    gc_add_root(&name)
+#define GC_ROOT(type, ptr) \
+    type * ptr __attribute__((cleanup(gc_root_cleanup))) = NULL; \
+    gc_add_root(&ptr); \
+    ptr
 
 /* Internal helper for GC_ROOT; do not call directly. */
 void gc_root_cleanup(void **ptr_addr);
+
+#define GC_MALLOC_ROOT(ptr, type) GC_ROOT(type, ptr) = gc_malloc(sizeof(type))
+#define GC_CALLOC_ROOT(ptr, nmemb, type) GC_ROOT(type, ptr) = gc_calloc(nmemb, sizeof(type))
+
+#define GC_FREE_ROOT(ptr) do { \
+    if (ptr) { \
+        gc_remove_root(&(ptr)); \
+        (ptr) = NULL; \
+    } \
+} while(0)
 
 #if GC_FINALIZING == 1
 
@@ -508,40 +516,6 @@ void gc_write_barrier(void *container_or_field, void *val);
 #define GC_ASSIGN_PTR(lhs, rhs) do { \
     GC_WRITE_BARRIER(&(lhs), (rhs)); \
     (lhs) = (rhs); \
-} while(0)
-
-/*
- * GC_MALLOC_ROOT(ptr, type)   - allocate memory and add to GC precise roots
- * GC_FREE_ROOT(ptr)           - remove from GC precise roots and set to NULL
- *
- * usage:
- *   GC_MALLOC_ROOT(my_ptr, struct thing);
- *   // use my_ptr ...
- *   GC_FREE_ROOT(my_ptr);
- */
-#define GC_MALLOC_ROOT(ptr, type) do { \
-    ptr = (type*)gc_malloc(sizeof(type)); \
-    if (ptr) gc_add_root(&(ptr)); \
-} while(0)
-
-#define GC_FREE_ROOT(ptr) do { \
-    if (ptr) { \
-        gc_remove_root(&(ptr)); \
-        (ptr) = NULL; \
-    } \
-} while(0)
-
-/*
- * GC_CALLOC_ROOT(ptr, nmemb, type)   - allocate memory and add to GC precise roots
- *
- * usage:
- *   GC_CALLOC_ROOT(my_ptr, nmemb, struct thing);
- *   // use my_ptr ...
- *   GC_FREE_ROOT(my_ptr);
- */
-#define GC_CALLOC_ROOT(ptr, nmemb, type) do { \
-    ptr = (type*)gc_calloc(nmemb, sizeof(type)); \
-    if (ptr) gc_add_root(&(ptr)); \
 } while(0)
 
 #ifdef __cplusplus

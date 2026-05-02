@@ -133,9 +133,12 @@ void* gc_calloc(size_t nmemb, size_t size) {
     return ptr;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
 void gc_free(void *ptr) {
     (void)ptr; // conservative GC does not free immediately
 }
+#pragma GCC diagnostic pop
 
 extern void gc_sweep(void);
 #if GC_MULTITHREAD
