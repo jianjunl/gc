@@ -25,9 +25,6 @@
 
 #if GC_FINALIZING == 1
 
-struct gc_mutex   { pthread_mutex_t lock; };
-struct gc_cond    { pthread_cond_t  cond; };
-
 // finalizers for pthread objects //
 static void gc_mutex_finalizer(void *obj, void *data) {
     (void)data;
@@ -228,14 +225,7 @@ int gc_pthread_cond_destroy(gc_cond_t *cond) {
     return ret;
 }
 
-struct gc_atomic { atomic_flag flag; };
-struct gc_atomic GC_ATOMIC_FLAG_INIT          = { .flag = ATOMIC_FLAG_INIT          };
-struct gc_mutex  GC_PTHREAD_MUTEX_INITIALIZER = { .lock = PTHREAD_MUTEX_INITIALIZER };
-
 #else // GC_FINALIZING
-
-gc_atomic_t GC_ATOMIC_FLAG_INT           = ATOMIC_FLAG_INIT          ;
-gc_mutex_t  GC_PTHREAD_MUTEX_INITIALIZER = PTHREAD_MUTEX_INITIALIZER ;
 
 inline int gc_pthread_mutex_init(gc_mutex_t **mutex, const pthread_mutexattr_t *attr) {
     *mutex = gc_malloc(sizeof(gc_mutex_t));
@@ -256,9 +246,6 @@ inline int gc_pthread_cond_init(gc_cond_t **cond, const pthread_condattr_t *attr
 #endif // GC_FINALIZING
 
 #else // GC_MULTITHREAD
-
-gc_atomic_t GC_ATOMIC_FLAG_INT           = ATOMIC_FLAG_INIT          ;
-gc_mutex_t  GC_PTHREAD_MUTEX_INITIALIZER = PTHREAD_MUTEX_INITIALIZER ;
 
 inline int gc_pthread_mutex_init(gc_mutex_t **mutex, const pthread_mutexattr_t *attr) {
     *mutex = gc_malloc(sizeof(gc_mutex_t));

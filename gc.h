@@ -35,7 +35,7 @@ extern "C" {
 #endif
 
 #ifndef GC_OPT_FINALIZING
-#define GC_OPT_FINALIZING  1 /* set to 0 to disable finalizers & weak refs */
+#define GC_OPT_FINALIZING  0 /* set to 0 to disable finalizers & weak refs */
 #endif
 
 #ifndef GC_OPT_FREELIST
@@ -474,8 +474,8 @@ typedef pthread_mutex_t gc_mutex_t;
 typedef pthread_cond_t gc_cond_t;
 typedef atomic_flag gc_atomic_t;
 
-extern gc_atomic_t GC_ATOMIC_FLAG_INIT;
-extern gc_mutex_t  GC_PTHREAD_MUTEX_INITIALIZER;
+#define GC_ATOMIC_FLAG_INIT          ATOMIC_FLAG_INIT
+#define GC_PTHREAD_MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER
 
 /* Mutex */
 int gc_pthread_mutex_init(gc_mutex_t **mutex, const pthread_mutexattr_t *attr);
@@ -491,12 +491,12 @@ int gc_pthread_cond_init(gc_cond_t **cond, const pthread_condattr_t *attr);
 
 #else
 
-typedef struct gc_mutex gc_mutex_t;
-typedef struct gc_cond gc_cond_t;
-typedef struct gc_atomic gc_atomic_t;
+typedef struct gc_mutex   { pthread_mutex_t lock; } gc_mutex_t;
+typedef struct gc_cond    { pthread_cond_t  cond; } gc_cond_t;
+typedef struct gc_atomic  { atomic_flag flag;     } gc_atomic_t;
 
-extern gc_atomic_t GC_ATOMIC_FLAG_INIT;
-extern gc_mutex_t  GC_PTHREAD_MUTEX_INITIALIZER;
+#define GC_PTHREAD_MUTEX_INITIALIZER ((struct gc_mutex) { .lock = PTHREAD_MUTEX_INITIALIZER })
+#define GC_ATOMIC_FLAG_INIT          ((struct gc_atomic){ .flag = ATOMIC_FLAG_INIT})
 
 /* Mutex */
 int gc_pthread_mutex_init(gc_mutex_t **mutex, const pthread_mutexattr_t *attr);
