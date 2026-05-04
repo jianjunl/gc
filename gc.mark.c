@@ -73,6 +73,8 @@ extern void *gc_stack_bottom;
 typedef struct gc_root {
     void              **ptr_addr;
     struct gc_root     *next;
+    struct gc_root     *more;
+    struct gc_root     *prev;      /* temporary stack pointer for traversal */
 } gc_root_t;
 
 extern gc_root_t *gc_roots;
@@ -133,6 +135,42 @@ static void gc_scan_region(void *start, void *end) {
     }
 }
 
+/*
+ * gc_mark_root_subtree – Mark every pointer reachable from the tree
+ * rooted at `root` (including all descendants).  Uses `prev` as an
+ * explicit stack, leaving it modified but never depended on after return.
+ */
+static void gc_mark_root_subtree(gc_root_t *root) {
+    gc_root_t *stack = NULL;
+
+    /* push root */
+    root->prev = NULL;
+    stack = root;
+
+    while (stack) {
+        gc_root_t *node = stack;
+        stack = node->prev;        /* pop */
+
+        void *ptr = *(node->ptr_addr);
+        if (ptr && gc_is_valid_ptr(ptr)) {
+            gc_block_t *blk = gc_find_block(ptr);
+            if (blk && !blk->marked) {
+                blk->marked = true;
+                gc_scan_region(blk->ptr, (char *)blk->ptr + blk->size);
+            }
+        }
+
+        /* Push all children (in any order) */
+        gc_root_t *child = node->more;
+        while (child) {
+            gc_root_t *next_child = child->next;
+            child->prev = stack;
+            stack = child;
+            child = next_child;
+        }
+    }
+}
+
 void gc_mark(void) {
     asm volatile("" ::: "memory");
     LOG_DEBUG("mark phase started");
@@ -171,18 +209,12 @@ void gc_mark(void) {
             gc_scan_region(&t->suspend_ctx, (char*)&t->suspend_ctx + sizeof(ucontext_t));
     }
     pthread_mutex_unlock(&gc_threads_lock);
+
     pthread_mutex_lock(&gc_roots_lock);
-    for (gc_root_t *r = gc_roots; r; r = r->next) {
-        void *root_ptr = *(r->ptr_addr);
-        if (root_ptr && gc_is_valid_ptr(root_ptr)) {
-            gc_block_t *blk = gc_find_block(root_ptr);
-            if (blk && !blk->marked) {
-                blk->marked = true;
-                gc_scan_region(blk->ptr, (char*)blk->ptr + blk->size);
-            }
-        }
-    }
+    for (gc_root_t *r = gc_roots; r; r = r->next)
+        gc_mark_root_subtree(r);
     pthread_mutex_unlock(&gc_roots_lock);
+
     LOG_DEBUG("mark phase finished");
 }
 #endif // ~GC_INCREMENTAL
@@ -243,17 +275,18 @@ bool gc_mark_incremental(size_t max_scan_bytes) {
 }
 
 void gc_mark_roots(void) {
-    asm volatile("" ::: "memory");
-    #define MARK_CANDIDATE(ptr) do { \
-        void *cand = (ptr); \
-        if (gc_is_valid_ptr(cand)) { \
-            gc_block_t *blk = gc_find_block(cand); \
-            if (blk && !blk->marked) { \
-                blk->marked = true; \
-                gc_gray_push(blk); \
-            } \
+#define MARK_CANDIDATE(ptr) do { \
+    void *cand = (ptr); \
+    if (gc_is_valid_ptr(cand)) { \
+        gc_block_t *blk = gc_find_block(cand); \
+        if (blk && !blk->marked) { \
+            blk->marked = true; \
+            gc_gray_push(blk); \
         } \
-    } while(0)
+    } \
+} while(0)
+
+    asm volatile("" ::: "memory");
 
     // data segment
     uintptr_t *p = (uintptr_t*)__data_start;
@@ -309,11 +342,25 @@ void gc_mark_roots(void) {
     // precise roots
     pthread_mutex_lock(&gc_roots_lock);
     for (gc_root_t *r = gc_roots; r; r = r->next) {
-        void *root_ptr = *(r->ptr_addr);
-        MARK_CANDIDATE(root_ptr);
+        gc_root_t *stack = NULL;
+        r->prev = NULL;
+        stack = r;
+        while (stack) {
+            gc_root_t *node = stack;
+            stack = node->prev;
+            void *root_ptr = *(node->ptr_addr);
+            MARK_CANDIDATE(root_ptr);
+            gc_root_t *child = node->more;
+            while (child) {
+                gc_root_t *next_child = child->next;
+                child->prev = stack;
+                stack = child;
+                child = next_child;
+            }
+        }
     }
     pthread_mutex_unlock(&gc_roots_lock);
-    #undef MARK_CANDIDATE
+#undef MARK_CANDIDATE
 }
 
 /* write barrier implementation (unified version)

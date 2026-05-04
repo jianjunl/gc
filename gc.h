@@ -54,6 +54,9 @@ extern "C" {
 #define GC_INCREMENTAL (GC_OPT & 0x04) >> 2
 #define GC_FINALIZING  (GC_OPT & 0x08) >> 3
 
+int gc_global_lock();
+int gc_global_unlock();
+
 /* ============================================================================
  * Initialization and Statistics
  * ============================================================================ */
@@ -159,6 +162,52 @@ void gc_add_root(void *ptr_addr);
  * @ptr_addr: the same address passed to gc_add_root().
  */
 void gc_remove_root(void *ptr_addr);
+
+/*
+ * gc_root_add - Register a precise root, optionally as a child of another root.
+ *
+ * @parent: address of a pointer variable that is already a root (e.g., &my_ptr).
+ *          Must NOT be NULL (calling with NULL is a fatal error).
+ * @child:  address of a pointer variable to protect.  If NULL, the function
+ *          behaves like the original gc_add_root(parent), i.e., it simply
+ *          registers @parent as an independent root.
+ *
+ * When @child is non‑NULL, the function traverses the entire root tree looking
+ * for nodes whose stored pointer value equals @parent.  For each such node,
+ * a new root node for @child is created and inserted as the first child of
+ * that parent.  If no parent node is found, @child is added as a top‑level
+ * root.  This allows automatic protection of fields inside a structure already
+ * reachable through an existing root.
+ */
+void gc_root_add(void *parent, void *child);
+
+/*
+ * gc_root_add_bulk - Register many contiguous pointer variables at once.
+ *
+ * @base:   address of the first pointer element (e.g., &array[0]).
+ * @nmemb:  number of elements.
+ * @size:   size of each element (usually sizeof(void*) or sizeof(array[0])).
+ *
+ * If a root node for @base already exists, its old children (if any) are freed
+ * and replaced by the new list.  Otherwise a new top‑level root for @base is
+ * created and populated with @nmemb child nodes.  This is the preferred way to
+ * protect an array of pointers.
+ */
+void gc_root_add_bulk(void *base, size_t nmemb, size_t size);
+
+/*
+ * gc_root_assign - Replace an existing root pointer address and discard its children.
+ *
+ * @old: current pointer variable address that is a root.
+ * @new: new pointer variable address to replace @old.
+ *
+ * Traverses the entire root tree.  Every node whose ptr_addr equals @old
+ * has its ptr_addr set to @new and its entire subtree of children (the
+ * ->more chain) is freed.  This is useful when the root variable moves
+ * (e.g., after realloc) or when a structure is replaced and the old
+ * internal references are no longer needed.
+ */
+void gc_root_assign(void *old, void *new);
 
 /*
  * GC_ROOT -  declare ptr for stack-allocated precise roots.

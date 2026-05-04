@@ -55,7 +55,6 @@ extern void gc_mark();
 #endif // GC_INCREMENTAL
 
 extern gc_block_t *gc_blocks;
-extern gc_block_t* gc_find_block(void *ptr);
 
 size_t      gc_allocated = 0;
 size_t      gc_threshold = GC_INITIAL_THRESHOLD;

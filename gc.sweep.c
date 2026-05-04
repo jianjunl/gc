@@ -38,7 +38,6 @@ typedef struct gc_block {
 #endif // GC_FINALIZING
 } gc_block_t;
 
-extern void* gc_os_alloc(size_t size);
 extern void gc_os_free(void *ptr, size_t size_hint);
 
 extern gc_block_t *gc_blocks;
