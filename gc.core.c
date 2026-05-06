@@ -32,16 +32,17 @@ typedef struct gc_finalizer gc_finalizer_t;
 
 /* ---------- Block metadata ---------- */
 typedef struct gc_block {
-    void               *ptr;
-    size_t              size;
-    bool                marked;
-    struct gc_block    *next;
+    void                 *ptr;
+    size_t                size;
+    bool                  marked;
+    struct gc_block      *next;
 #if GC_INCREMENTAL
-    struct gc_block    *gray_next;   // gray list
+    struct gc_block      *gray_next;   // gray list
 #endif // GC_INCREMENTAL
 #if GC_FINALIZING
-    gc_finalizer_t     *finalizers;  // finalizer list
+    gc_finalizer_t       *finalizers;  // finalizer list
 #endif // GC_FINALIZING
+    const gc_type_info_t *type_info;   // typed allocation layout
 } gc_block_t;
 
 extern void* gc_os_alloc(size_t size);
@@ -108,6 +109,7 @@ void* gc_malloc(size_t size) {
     gc_block_t *blk = malloc(sizeof(gc_block_t));
     if (!blk) { gc_os_free(user_ptr, size); return NULL; }
 
+    blk->type_info = NULL;
     blk->ptr    = user_ptr;
     blk->size   = size;
     blk->marked = false;

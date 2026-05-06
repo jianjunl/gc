@@ -18,6 +18,7 @@
 #include <signal.h>   /* for sigjmp_buf */
 #include <pthread.h>  /* for pthread_t, pthread_attr_t */
 #include <stdatomic.h>
+#include <sys/types.h> // For ssize_t
 
 #ifdef __cplusplus
 extern "C" {
@@ -31,15 +32,15 @@ extern "C" {
 #endif
 
 #ifndef GC_OPT_INCREMENTAL
-#define GC_OPT_INCREMENTAL 1 /* set to 1 to enable incremental marking */
+#define GC_OPT_INCREMENTAL 0 /* set to 1 to enable incremental marking */
 #endif
 
 #ifndef GC_OPT_FINALIZING
-#define GC_OPT_FINALIZING  0 /* set to 0 to disable finalizers & weak refs */
+#define GC_OPT_FINALIZING  1 /* set to 0 to disable finalizers & weak refs */
 #endif
 
 #ifndef GC_OPT_FREELIST
-#define GC_OPT_FREELIST    1
+#define GC_OPT_FREELIST    0
 #endif
 
 #define GC_MASK(x, n) ((x) << (n))
@@ -237,6 +238,93 @@ void gc_root_cleanup(void **ptr_addr);
         (ptr) = NULL; \
     } \
 } while(0)
+
+
+/* ------------------------------------------------------------------------
+ * Typed allocation support
+ * ------------------------------------------------------------------------ */
+
+/*
+ * gc_type_info_t – describes the positions of pointer fields inside a
+ *                 GC‑managed object.
+ *
+ * Fields:
+ *   object_size   – size of a single element (needed for arrays).
+ *   n_offsets     – number of offsets in the offsets array.
+ *   offsets[]     – array of byte offsets from the start of the element
+ *                   where pointer fields reside.  For unions, list all
+ *                   possible pointer offsets of every member; the collector
+ *                   scans them all.
+ */
+typedef struct gc_type_info {
+    size_t  object_size;
+    size_t  n_offsets;
+    ssize_t offsets[];          /* flexible array, n_offsets elements */
+} gc_type_info_t;
+
+/*
+ * GC_TYPE_INFO(name, struct_type, ...)
+ *
+ * Create a static gc_type_info_t descriptor named 'name' for 'struct_type'
+ * containing the given offsetof(...) expressions.
+ *
+ * Example:
+ *   GC_TYPE_INFO(my_list_type, struct my_list,
+ *                offsetof(struct my_list, next),
+ *                offsetof(struct my_list, data));
+ */
+#define GC_TYPE_INFO(name, struct_type, ...)                          \
+    static const gc_type_info_t name = {                              \
+        .object_size = sizeof(struct_type),                           \
+        .n_offsets   = (sizeof((ssize_t[]){ __VA_ARGS__ }) /          \
+                        sizeof(ssize_t)),                             \
+        .offsets     = { __VA_ARGS__ }                                \
+    }
+
+#define GC_TYPED(name, struct_type, ...)                              \
+    typedef struct_type struct_type_local;                            \
+    static const struct {                                             \
+        gc_type_info_t info;                                          \
+        ssize_t offsets[sizeof((ssize_t[]){ __VA_ARGS__ }) /          \
+                        sizeof(ssize_t)];                             \
+    } name ## _full = {                                               \
+        .info = {                                                     \
+            .object_size = sizeof(struct_type),                       \
+            .n_offsets = sizeof((ssize_t[]){ __VA_ARGS__ }) /         \
+                         sizeof(ssize_t)                              \
+        },                                                            \
+        .offsets = { __VA_ARGS__ }                                    \
+    };                                                                \
+    static const gc_type_info_t *name = (const gc_type_info_t *)&name ## _full;
+
+#define GC_FIELD(field) offsetof(struct_type_local, field)
+
+
+/* Allocate memory with known pointer layout.
+ * @size:       total size of the allocation (may be > element_size for arrays).
+ * @type_info:  pointer to a static gc_type_info_t describing pointer fields.
+ * The new block will be tracked by the collector; during marking, only the
+ * described offsets will be scanned – no conservative heuristics.
+ */
+/* Typed allocation functions */
+void* gc_typed_malloc(size_t size, const gc_type_info_t *type_info);
+/* Zero‑initialised variant. */
+void* gc_typed_calloc(size_t nmemb, size_t size, const gc_type_info_t *type_info);
+
+/* Place a global pointer variable in a dedicated section so the GC can
+   automatically treat it as a root – no explicit add_root() needed. */
+#define GC_GLOBAL(type, name) \
+    type * name __attribute__((section("gc_roots"))) = NULL
+#define GC_GLOBAL1(type, x)      GC_GLOBAL(type, x)
+#define GC_GLOBAL2(type, x, ...) GC_GLOBAL(type, x);GC_GLOBAL1(type, __VA_ARGS__)
+#define GC_GLOBAL3(type, x, ...) GC_GLOBAL(type, x);GC_GLOBAL2(type, __VA_ARGS__)
+#define GC_GLOBAL4(type, x, ...) GC_GLOBAL(type, x);GC_GLOBAL3(type, __VA_ARGS__)
+#define GC_GLOBAL5(type, x, ...) GC_GLOBAL(type, x);GC_GLOBAL4(type, __VA_ARGS__)
+#define GC_GLOBAL6(type, x, ...) GC_GLOBAL(type, x);GC_GLOBAL5(type, __VA_ARGS__)
+#define GC_GLOBAL7(type, x, ...) GC_GLOBAL(type, x);GC_GLOBAL6(type, __VA_ARGS__)
+#define GC_GLOBAL8(type, x, ...) GC_GLOBAL(type, x);GC_GLOBAL7(type, __VA_ARGS__)
+#define GC_GLOBAL9(type, x, ...) GC_GLOBAL(type, x);GC_GLOBAL8(type, __VA_ARGS__)
+
 
 #if GC_FINALIZING == 1
 
