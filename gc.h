@@ -262,11 +262,15 @@ typedef struct gc_type_info {
     ssize_t offsets[];          /* flexible array, n_offsets elements */
 } gc_type_info_t;
 
+/* Special type descriptor for blocks that are plain pointer arrays. */
+extern const gc_type_info_t GC_TYPE_PTR_ARRAY;
+
 /*
  * GC_TYPE_INFO(name, struct_type, ...)
  *
- * Create a static gc_type_info_t descriptor named 'name' for 'struct_type'
- * containing the given offsetof(...) expressions.
+ * Creates a static gc_type_info_t constant named 'name' that describes
+ * the pointer fields of 'struct_type' (specified via offsetof(...)).
+ * This constant can be used directly with functions like gc_typed_malloc.
  *
  * Example:
  *   GC_TYPE_INFO(my_list_type, struct my_list,
@@ -281,23 +285,72 @@ typedef struct gc_type_info {
         .offsets     = { __VA_ARGS__ }                                \
     }
 
-#define GC_TYPE(name, struct_type, ...)                               \
-    typedef struct_type struct_type_local;                            \
-    static const struct {                                             \
-        gc_type_info_t info;                                          \
-        ssize_t offsets[sizeof((ssize_t[]){ __VA_ARGS__ }) /          \
-                        sizeof(ssize_t)];                             \
-    } name ## _full = {                                               \
-        .info = {                                                     \
-            .object_size = sizeof(struct_type),                       \
-            .n_offsets   = sizeof((ssize_t[]){ __VA_ARGS__ }) /       \
-                           sizeof(ssize_t)                            \
-        },                                                            \
-        .offsets = { __VA_ARGS__ }                                    \
-    };                                                                \
-    static const gc_type_info_t *name = (const gc_type_info_t *)&name ## _full;
+/*
+ * GC_STRUCT_TI(name, ...)
+ *
+ * Convenience macro that builds a type descriptor for a struct.
+ * It internally creates a local typedef `type_##name##_local` for `struct name`
+ * and then generates a static `gc_type_info_t` constant named `struct_##name##_ti`
+ * that describes the pointer fields listed in __VA_ARGS__ (expected to be a
+ * series of `offsetof(struct name, field)` expressions).
+ *
+ * The resulting descriptor can be passed directly to `gc_typed_malloc` etc.
+ * Using this macro together with `GC_OFF(name, field)` avoids having to repeat
+ * the struct tag inside every `offsetof`.
+ */
+#define GC_STRUCT_TI(name,  ...)                                      \
+    typedef struct name type_##name##_local;                          \
+    GC_TYPE_INFO(struct_##name##_ti, struct name, __VA_ARGS__)
 
-#define GC_OFF(field) offsetof(struct_type_local, field)
+/*
+ * GC_UNION_TI(name, ...)
+ *
+ * Same as GC_STRUCT_TI, but for union types.
+ * Defines a local typedef `type_##name##_local` for `union name` and creates
+ * a type descriptor named `union_##name##_ti`.
+ */
+#define GC_UNION_TI(name,  ...)                                       \
+    typedef union name type_##name##_local;                           \
+    GC_TYPE_INFO(union_##name##_ti, union name, __VA_ARGS__)
+
+/*
+ * GC_OFF(name, field)
+ *
+ * Returns the byte offset of `field` within a struct or union that has been
+ * introduced with GC_STRUCT_TI(name, ...) or GC_UNION_TI(name, ...).
+ * It leverages the local typedef `type_##name##_local` to avoid repeating
+ * the struct/union tag.
+ */
+#define GC_OFF(name, field) offsetof(type_##name##_local, field)
+
+/*
+ * GC_THREAD_LOCAL(type, name)
+ *
+ * Declares a thread‑local pointer variable 'name' (type *).  Its address
+ * can be registered as a precise GC root.
+ *
+ * Unlike GC_GLOBAL, _Thread_local variables cannot be placed in the
+ * gc_roots section.  You must manually call gc_add_root(&name) in every
+ * thread that uses the variable, and gc_remove_root(&name) before the
+ * thread exits.
+ *
+ * The recommended practice is to register at the entry of the thread
+ * function and unregister at the exit, or to rely on an enhanced
+ * gc_pthread_create wrapper that handles this automatically.
+ */
+#define GC_THREAD_LOCAL(type, name) _Thread_local type * name = NULL
+
+/*
+ * GC_TLS_REGISTER(name) / GC_TLS_UNREGISTER(name)
+ *
+ * Convenience macros for registering / unregistering a variable declared
+ * with GC_THREAD_LOCAL.
+ *
+ * Note: these must be called in each thread separately because the address
+ * of a thread‑local variable differs per thread.
+ */
+#define GC_TLS_REGISTER(name)   gc_add_root(&(name))
+#define GC_TLS_UNREGISTER(name) gc_remove_root(&(name))
 
 
 /* Allocate memory with known pointer layout.

@@ -65,24 +65,19 @@ extern void* gc_os_alloc(size_t size);
 extern void gc_os_free(void *ptr, size_t size_hint);
 
 #if GC_MULTITHREAD 
-
 // ---------- Stop-The-World synchronizing ---------- //
 extern _Thread_local gc_thread_info_t *gc_tls_self_info;
-
 #endif // GC_MULTITHREAD
 
 extern gc_block_t* gc_find_block(void *ptr);
 
-// ---------- Pointer validation ---------- //
-static bool gc_is_valid_ptr(void *ptr) {
-    uintptr_t p = (uintptr_t)ptr;
-    for (gc_block_t *blk = gc_blocks; blk; blk = blk->next) {
-        uintptr_t start = (uintptr_t)blk->ptr;
-        uintptr_t end   = start + blk->size;
-        if (p >= start && p < end) return true;
-    }
-    return false;
-}
+/* Special type descriptor for blocks that are plain pointer arrays.
+   Declared in gc.h, defined here. */
+const gc_type_info_t GC_TYPE_PTR_ARRAY = {
+    .object_size = sizeof(void*),
+    .n_offsets   = 1,
+    .offsets     = { (ssize_t)0 }
+};
 
 extern void* get_stack_top(void);
 
@@ -92,19 +87,22 @@ extern void* get_stack_top(void);
 
 static void gc_scan_block_content(gc_block_t *blk);
 
+/*
+ * Scan a memory region conservatively, treating every aligned word
+ * as a potential pointer.
+ */
 static void gc_scan_region(void *start, void *end) {
     uintptr_t *p = (uintptr_t*)((uintptr_t)start & ~(sizeof(uintptr_t)-1));
     uintptr_t *limit = (uintptr_t*)end;
     for (; p < limit; p++) {
         uintptr_t val = *p;
-        if (val < 0x1000) continue;
+        if (val < 0x1000) continue;          // null or very low address
         void *candidate = (void*)val;
-        if (gc_is_valid_ptr(candidate)) {
-            gc_block_t *blk = gc_find_block(candidate);
-            if (blk && !blk->marked) {
-                blk->marked = true;
-                gc_scan_block_content(blk);
-            }
+        /* Single traversal: gc_find_block returns NULL if not managed */
+        gc_block_t *blk = gc_find_block(candidate);
+        if (blk && !blk->marked) {
+            blk->marked = true;
+            gc_scan_block_content(blk);
         }
     }
 }
@@ -114,22 +112,37 @@ static void gc_scan_block_content(gc_block_t *blk) {
     if (!blk || !blk->marked) return;
 
     if (blk->type_info) {
-        /* ---- Typed scanning ---- */
-        const gc_type_info_t *ti = blk->type_info;
-        size_t elem_count = blk->size / ti->object_size;
-        char *base = (char*)blk->ptr;
-        for (size_t i = 0; i < elem_count; i++) {
-            char *elem = base + i * ti->object_size;
-            for (size_t j = 0; j < ti->n_offsets; j++) {
-                ssize_t off = ti->offsets[j];
-                if (off < 0) break;          /* sentinel, though n_offsets guards */
-                void **pp = (void**)(elem + off);
-                void *cand = *pp;
-                if (cand && gc_is_valid_ptr(cand)) {
+        if (blk->type_info == &GC_TYPE_PTR_ARRAY) {
+            /* ---- Pointer array: every sizeof(void*) cell is a pointer ---- */
+            uintptr_t *p = (uintptr_t*)blk->ptr;
+            uintptr_t *limit = (uintptr_t*)((char*)blk->ptr + blk->size);
+            for (; p < limit; p++) {
+                uintptr_t val = *p;
+                if (val < 0x1000) continue;
+                void *candidate = (void*)val;
+                gc_block_t *target = gc_find_block(candidate);
+                if (target && !target->marked) {
+                    target->marked = true;
+                    gc_scan_block_content(target);   // recursion
+                }
+            }
+        } else {
+            /* ---- Typed scanning ---- */
+            const gc_type_info_t *ti = blk->type_info;
+            size_t elem_count = blk->size / ti->object_size;
+            char *base = (char*)blk->ptr;
+            for (size_t i = 0; i < elem_count; i++) {
+                char *elem = base + i * ti->object_size;
+                for (size_t j = 0; j < ti->n_offsets; j++) {
+                    ssize_t off = ti->offsets[j];
+                    if (off < 0) break;          /* sentinel, though n_offsets guards */
+                    void **pp = (void**)(elem + off);
+                    void *cand = *pp;
+                    if (!cand) continue;
                     gc_block_t *target = gc_find_block(cand);
                     if (target && !target->marked) {
                         target->marked = true;
-                        gc_scan_block_content(target);   /* recursion */
+                        gc_scan_block_content(target);
                     }
                 }
             }
@@ -142,8 +155,9 @@ static void gc_scan_block_content(gc_block_t *blk) {
 
 /*
  * gc_mark_root_subtree – Mark every pointer reachable from the tree
- * rooted at `root` (including all descendants).  Uses `prev` as an
- * explicit stack, leaving it modified but never depended on after return.
+ * rooted at `root` (including all descendants).  Uses the `prev` field
+ * as an explicit stack, leaving it modified but never depended on
+ * after return.
  */
 static void gc_mark_root_subtree(gc_root_t *root) {
     gc_root_t *stack = NULL;
@@ -154,10 +168,10 @@ static void gc_mark_root_subtree(gc_root_t *root) {
 
     while (stack) {
         gc_root_t *node = stack;
-        stack = node->prev;        /* pop */
+        stack = node->prev;         /* pop */
 
         void *ptr = *(node->ptr_addr);
-        if (ptr && gc_is_valid_ptr(ptr)) {
+        if (ptr) {
             gc_block_t *blk = gc_find_block(ptr);
             if (blk && !blk->marked) {
                 blk->marked = true;
@@ -165,7 +179,7 @@ static void gc_mark_root_subtree(gc_root_t *root) {
             }
         }
 
-        /* Push all children (in any order) */
+        /* Push all children (any order) */
         gc_root_t *child = node->more;
         while (child) {
             gc_root_t *next_child = child->next;
@@ -187,12 +201,11 @@ void gc_mark(void) {
         void **end   = &__stop_gc_roots;
         for (void **p = begin; p < end; p++) {
             void *cand = *p;
-            if (cand && gc_is_valid_ptr(cand)) {
-                gc_block_t *blk = gc_find_block(cand);
-                if (blk && !blk->marked) {
-                    blk->marked = true;
-                    gc_scan_block_content(blk);
-                }
+            if (!cand) continue;
+            gc_block_t *blk = gc_find_block(cand);
+            if (blk && !blk->marked) {
+                blk->marked = true;
+                gc_scan_block_content(blk);
             }
         }
     }
@@ -205,7 +218,7 @@ void gc_mark(void) {
     if (getcontext(&ctx) == 0)
         gc_scan_region(&ctx, (char*)&ctx + sizeof(ctx));
 #else // ~GC_MULTITHREAD
-    // Scan stack of current thread (that calling gc_collect)
+    // Scan stack of the thread that called gc_collect
     if (gc_tls_self_info) {
         void *my_stack_top = get_stack_top();
         if (gc_tls_self_info->stack_bottom && my_stack_top) {
@@ -213,7 +226,7 @@ void gc_mark(void) {
             LOG_DEBUG("Scanned caller thread's stack [%p - %p]", my_stack_top, gc_tls_self_info->stack_bottom);
         }
     }
-    // Scan registers of current thread (that calling gc_collect)
+    // Scan registers of the thread that called gc_collect
     ucontext_t ctx;
     if (getcontext(&ctx) == 0) {
         gc_scan_region(&ctx, (char*)&ctx + sizeof(ctx));
@@ -263,45 +276,56 @@ static void gc_mark_object(gc_block_t *blk) {
 }
 
 /* Typed or conservative scanning for a single block in incremental mode.
- * Marks any discovered pointers via gc_mark_object (pushes to gray list),
+ * Marks any discovered white objects via gc_mark_object (pushes to gray list),
  * NO recursive deep scan. */
 static void gc_scan_block_content_incremental(gc_block_t *blk) {
     if (!blk) return;
 
     if (blk->type_info) {
-        const gc_type_info_t *ti = blk->type_info;
-        size_t elem_count = blk->size / ti->object_size;
-        char *base = (char*)blk->ptr;
-        for (size_t i = 0; i < elem_count; i++) {
-            char *elem = base + i * ti->object_size;
-            for (size_t j = 0; j < ti->n_offsets; j++) {
-                ssize_t off = ti->offsets[j];
-                if (off < 0) break;          /* sentinel guard */
-                void **pp = (void**)(elem + off);
-                void *cand = *pp;
-                if (cand && gc_is_valid_ptr(cand)) {
+        if (blk->type_info == &GC_TYPE_PTR_ARRAY) {
+            /* Pointer array: every aligned word is a potential pointer */
+            uintptr_t *p = (uintptr_t*)blk->ptr;
+            uintptr_t *limit = (uintptr_t*)((char*)blk->ptr + blk->size);
+            for (; p < limit; p++) {
+                uintptr_t val = *p;
+                if (val < 0x1000) continue;
+                void *candidate = (void*)val;
+                gc_block_t *target = gc_find_block(candidate);
+                if (target) gc_mark_object(target);   // only mark, no recursion
+            }
+        } else {
+            /* Typed scanning (original) */
+            const gc_type_info_t *ti = blk->type_info;
+            size_t elem_count = blk->size / ti->object_size;
+            char *base = (char*)blk->ptr;
+            for (size_t i = 0; i < elem_count; i++) {
+                char *elem = base + i * ti->object_size;
+                for (size_t j = 0; j < ti->n_offsets; j++) {
+                    ssize_t off = ti->offsets[j];
+                    if (off < 0) break;          /* sentinel guard */
+                    void **pp = (void**)(elem + off);
+                    void *cand = *pp;
+                    if (!cand) continue;
                     gc_block_t *target = gc_find_block(cand);
                     if (target) gc_mark_object(target);
                 }
             }
         }
     } else {
-        // Conservative fallback – original behaviour
+        /* Conservative fallback – original behaviour */
         uintptr_t *p = (uintptr_t*)blk->ptr;
         uintptr_t *limit = (uintptr_t*)((char*)blk->ptr + blk->size);
         for (; p < limit; p++) {
             uintptr_t val = *p;
             if (val < 0x1000) continue;
             void *candidate = (void*)val;
-            if (gc_is_valid_ptr(candidate)) {
-                gc_block_t *target = gc_find_block(candidate);
-                if (target) gc_mark_object(target);
-            }
+            gc_block_t *target = gc_find_block(candidate);
+            if (target) gc_mark_object(target);
         }
     }
 }
 
-// Replaces the old gc_scan_block – now just a wrapper
+// Wraps gc_scan_block_content_incremental for backward compatibility
 static void gc_scan_block(gc_block_t *blk) {
     gc_scan_block_content_incremental(blk);
 }
@@ -325,80 +349,82 @@ bool gc_mark_incremental(size_t max_scan_bytes) {
     return more_work;
 }
 
+/*
+ * gc_mark_roots – phase 1 of incremental marking.
+ * Scans all roots (data segment, special gc_roots section, stacks,
+ * registers, precise roots) and pushes the initial white objects
+ * into the gray list.
+ */
 void gc_mark_roots(void) {
-#define MARK_CANDIDATE(ptr) do { \
-    void *cand = (ptr); \
-    if (gc_is_valid_ptr(cand)) { \
-        gc_block_t *blk = gc_find_block(cand); \
-        if (blk && !blk->marked) { \
-            blk->marked = true; \
-            gc_gray_push(blk); \
-        } \
-    } \
-} while(0)
-
     asm volatile("" ::: "memory");
 
-    // data segment
+    /* Helper: find the block and, if white, mark it gray */
+#define MARK_IF_MANAGED(ptr) do {               \
+        void *cand = (ptr);                     \
+        if (cand) {                             \
+            gc_block_t *blk = gc_find_block(cand); \
+            if (blk) gc_mark_object(blk);       \
+        }                                       \
+    } while(0)
+
+    /* Data segment */
     uintptr_t *p = (uintptr_t*)__data_start;
     uintptr_t *end = (uintptr_t*)_end;
-    for (; p < end; p++) MARK_CANDIDATE((void*)*p);
+    for (; p < end; p++) MARK_IF_MANAGED((void*)*p);
 
-
-    // Scan the gc_roots section (if it exists)
+    /* gc_roots section (if exists) */
     if (&__start_gc_roots != &__stop_gc_roots) {
         void **begin = &__start_gc_roots;
         void **end   = &__stop_gc_roots;
         for (void **p = begin; p < end; p++)
-            MARK_CANDIDATE((void*)*p);
+            MARK_IF_MANAGED(*p);
     }
 
 #if ~GC_MULTITHREAD
-    // main thread stack
+    /* Main thread stack */
     void *stack_top = get_stack_top();
     if (gc_stack_bottom && stack_top)
         for (p = (uintptr_t*)stack_top; p < (uintptr_t*)gc_stack_bottom; p++)
-            MARK_CANDIDATE((void*)*p);
-#else // ~GC_MULTITHREAD
-    // main thread stack of calling thread
+            MARK_IF_MANAGED((void*)*p);
+#else
+    /* Stack of calling thread */
     if (gc_tls_self_info) {
         void *my_stack_top = get_stack_top();
         if (gc_tls_self_info->stack_bottom && my_stack_top)
             for (p = (uintptr_t*)my_stack_top; p < (uintptr_t*)gc_tls_self_info->stack_bottom; p++)
-                MARK_CANDIDATE((void*)*p);
+                MARK_IF_MANAGED((void*)*p);
     }
-#endif // ~GC_MULTITHREAD
-
+#endif
 
 #if ~GC_MULTITHREAD
-    // main thread registers
+    /* Main thread registers */
     ucontext_t ctx;
     if (getcontext(&ctx) == 0)
         for (p = (uintptr_t*)&ctx; p < (uintptr_t*)((char*)&ctx + sizeof(ctx)); p++)
-            MARK_CANDIDATE((void*)*p);
-#else // ~GC_MULTITHREAD
-    // main thread registers of calling thread
+            MARK_IF_MANAGED((void*)*p);
+#else
+    /* Registers of calling thread */
     ucontext_t ctx;
     if (getcontext(&ctx) == 0)
         for (p = (uintptr_t*)&ctx; p < (uintptr_t*)((char*)&ctx + sizeof(ctx)); p++)
-            MARK_CANDIDATE((void*)*p);
-#endif // ~GC_MULTITHREAD
+            MARK_IF_MANAGED((void*)*p);
+#endif
 
-    // suspended threads
+    /* Suspended threads */
     pthread_mutex_lock(&gc_threads_lock);
     for (gc_thread_info_t *t = gc_threads; t; t = t->next) {
         if (pthread_equal(t->tid, pthread_self())) continue;
         if (t->stack_top && t->stack_bottom)
             for (p = t->stack_top; p < (uintptr_t*)t->stack_bottom; p++)
-                MARK_CANDIDATE((void*)*p);
+                MARK_IF_MANAGED((void*)*p);
         if (t->ctx_valid)
             for (p = (uintptr_t*)&t->suspend_ctx;
                  p < (uintptr_t*)((char*)&t->suspend_ctx + sizeof(ucontext_t)); p++)
-                MARK_CANDIDATE((void*)*p);
+                MARK_IF_MANAGED((void*)*p);
     }
     pthread_mutex_unlock(&gc_threads_lock);
 
-    // precise roots
+    /* Precise roots */
     pthread_mutex_lock(&gc_roots_lock);
     for (gc_root_t *r = gc_roots; r; r = r->next) {
         gc_root_t *stack = NULL;
@@ -407,8 +433,7 @@ void gc_mark_roots(void) {
         while (stack) {
             gc_root_t *node = stack;
             stack = node->prev;
-            void *root_ptr = *(node->ptr_addr);
-            MARK_CANDIDATE(root_ptr);
+            MARK_IF_MANAGED(*(node->ptr_addr));
             gc_root_t *child = node->more;
             while (child) {
                 gc_root_t *next_child = child->next;
@@ -419,11 +444,12 @@ void gc_mark_roots(void) {
         }
     }
     pthread_mutex_unlock(&gc_roots_lock);
-#undef MARK_CANDIDATE
+
+#undef MARK_IF_MANAGED
 }
 
-/* write barrier implementation (unified version)
- * @container: containing object or address of its field (eg. obj or &obj->field)
+/* write barrier implementation (unified)
+ * @container: containing object or address of its field (e.g., obj or &obj->field)
  * @val:       new target pointer to be assigned
  */
 void gc_write_barrier(void *container, void *val) {
@@ -431,13 +457,13 @@ void gc_write_barrier(void *container, void *val) {
 
     gc_block_t *container_blk = gc_find_block(container);
     if (!container_blk || !container_blk->marked) {
-        return;  // container not black, no need further processing
+        return;   // container not black, no further processing needed
     }
 
     gc_block_t *val_blk = gc_find_block(val);
     if (!val_blk || val_blk->marked) return;
 
-    LOG_DEBUG("write barrier: marking container object %p (white object %p to be assigning)", container, val);
+    LOG_DEBUG("write barrier: marking container object %p (white object %p to be assigned)", container, val);
     pthread_mutex_lock(&gc_gray_lock);
     gc_mark_object(val_blk);
     pthread_mutex_unlock(&gc_gray_lock);
