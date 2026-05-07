@@ -32,7 +32,7 @@ extern "C" {
 #endif
 
 #ifndef GC_OPT_INCREMENTAL
-#define GC_OPT_INCREMENTAL 0 /* set to 1 to enable incremental marking */
+#define GC_OPT_INCREMENTAL 1 /* set to 1 to enable incremental marking */
 #endif
 
 #ifndef GC_OPT_FINALIZING
@@ -40,7 +40,7 @@ extern "C" {
 #endif
 
 #ifndef GC_OPT_FREELIST
-#define GC_OPT_FREELIST    0
+#define GC_OPT_FREELIST    1
 #endif
 
 #define GC_MASK(x, n) ((x) << (n))
@@ -281,7 +281,7 @@ typedef struct gc_type_info {
         .offsets     = { __VA_ARGS__ }                                \
     }
 
-#define GC_TYPED(name, struct_type, ...)                              \
+#define GC_TYPE(name, struct_type, ...)                               \
     typedef struct_type struct_type_local;                            \
     static const struct {                                             \
         gc_type_info_t info;                                          \
@@ -290,14 +290,14 @@ typedef struct gc_type_info {
     } name ## _full = {                                               \
         .info = {                                                     \
             .object_size = sizeof(struct_type),                       \
-            .n_offsets = sizeof((ssize_t[]){ __VA_ARGS__ }) /         \
-                         sizeof(ssize_t)                              \
+            .n_offsets   = sizeof((ssize_t[]){ __VA_ARGS__ }) /       \
+                           sizeof(ssize_t)                            \
         },                                                            \
         .offsets = { __VA_ARGS__ }                                    \
     };                                                                \
     static const gc_type_info_t *name = (const gc_type_info_t *)&name ## _full;
 
-#define GC_FIELD(field) offsetof(struct_type_local, field)
+#define GC_OFF(field) offsetof(struct_type_local, field)
 
 
 /* Allocate memory with known pointer layout.

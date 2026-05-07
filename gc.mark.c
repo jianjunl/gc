@@ -26,21 +26,7 @@
 typedef struct gc_finalizer gc_finalizer_t;
 #endif // GC_FINALIZING
 
-// ---------- Block metadata ---------- //
-typedef struct gc_block {
-    void                 *ptr;
-    size_t                size;
-    bool                  marked;
-    struct gc_block      *next;
-#if GC_INCREMENTAL
-    struct gc_block      *gray_next;   // gray list
-#endif // GC_INCREMENTAL
-#if GC_FINALIZING
-    gc_finalizer_t       *finalizers;  // finalizer list
-#endif // GC_FINALIZING
-    const gc_type_info_t *type_info;   // typed allocation layout
-} gc_block_t;
-
+#include "gc.block.h"
 
 #if GC_INCREMENTAL
 // Incremental marking phases //
@@ -50,21 +36,13 @@ gc_block_t *gc_gray_blocks = NULL;
 pthread_mutex_t gc_gray_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif // GC_INCREMENTAL
 
-// ---------- Thread information ---------- //
-typedef struct gc_thread_info {
-    pthread_t           tid;
-    void               *stack_bottom;
-    void               *stack_top;
-    ucontext_t          suspend_ctx;
-    bool                ctx_valid;
-    struct gc_thread_info *next;
-} gc_thread_info_t;
+#include "gc.thread.info.h"
 
 gc_thread_info_t *gc_threads = NULL;
 pthread_mutex_t   gc_threads_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // ---------- Global state ---------- //
-gc_block_t *gc_blocks = NULL;
+extern gc_block_t *gc_blocks;
 extern size_t gc_threshold;
 
 extern char __data_start[];
@@ -77,12 +55,7 @@ extern void *__start_gc_roots __attribute__((weak));
 extern void *__stop_gc_roots  __attribute__((weak));
 
 // ---------- Precise roots ---------- //
-typedef struct gc_root {
-    void              **ptr_addr;
-    struct gc_root     *next;
-    struct gc_root     *more;
-    struct gc_root     *prev;      /* temporary stack pointer for traversal */
-} gc_root_t;
+#include "gc.root.h"
 
 extern gc_root_t *gc_roots;
 extern pthread_mutex_t gc_roots_lock;
@@ -98,6 +71,8 @@ extern _Thread_local gc_thread_info_t *gc_tls_self_info;
 
 #endif // GC_MULTITHREAD
 
+extern gc_block_t* gc_find_block(void *ptr);
+
 // ---------- Pointer validation ---------- //
 static bool gc_is_valid_ptr(void *ptr) {
     uintptr_t p = (uintptr_t)ptr;
@@ -107,34 +82,6 @@ static bool gc_is_valid_ptr(void *ptr) {
         if (p >= start && p < end) return true;
     }
     return false;
-}
-
-gc_block_t* gc_find_block(void *ptr) {
-    uintptr_t p = (uintptr_t)ptr;
-    for (gc_block_t *blk = gc_blocks; blk; blk = blk->next) {
-        uintptr_t start = (uintptr_t)blk->ptr;
-        uintptr_t end   = start + blk->size;
-        if (p >= start && p < end) return blk;
-    }
-    return NULL;
-}
-
-void* gc_typed_malloc(size_t size, const gc_type_info_t *type_info) {
-    void *p = gc_malloc(size);   /* gc_malloc sets type_info = NULL */
-    if (p) {
-        gc_block_t *blk = gc_find_block(p);
-        if (blk) blk->type_info = type_info;
-    }
-    return p;
-}
-
-void* gc_typed_calloc(size_t nmemb, size_t size, const gc_type_info_t *type_info) {
-    void *p = gc_calloc(nmemb, size);
-    if (p) {
-        gc_block_t *blk = gc_find_block(p);
-        if (blk) blk->type_info = type_info;
-    }
-    return p;
 }
 
 extern void* get_stack_top(void);

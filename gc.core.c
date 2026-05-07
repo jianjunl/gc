@@ -30,20 +30,7 @@
 typedef struct gc_finalizer gc_finalizer_t;
 #endif // GC_FINALIZING
 
-/* ---------- Block metadata ---------- */
-typedef struct gc_block {
-    void                 *ptr;
-    size_t                size;
-    bool                  marked;
-    struct gc_block      *next;
-#if GC_INCREMENTAL
-    struct gc_block      *gray_next;   // gray list
-#endif // GC_INCREMENTAL
-#if GC_FINALIZING
-    gc_finalizer_t       *finalizers;  // finalizer list
-#endif // GC_FINALIZING
-    const gc_type_info_t *type_info;   // typed allocation layout
-} gc_block_t;
+#include "gc.block.h"
 
 extern void* gc_os_alloc(size_t size);
 extern void gc_os_free(void *ptr, size_t size_hint);
@@ -82,7 +69,27 @@ static inline size_t align_up(size_t size, size_t align) {
     return (size + align - 1) & ~(align - 1);
 }
 
+extern gc_block_t* gc_find_block(void *ptr);
+
 /* ---------- Allocation functions ---------- */
+void* gc_typed_malloc(size_t size, const gc_type_info_t *type_info) {
+    void *p = gc_malloc(size);   /* gc_malloc sets type_info = NULL */
+    if (p) {
+        gc_block_t *blk = gc_find_block(p);
+        if (blk) blk->type_info = type_info;
+    }
+    return p;
+}
+
+void* gc_typed_calloc(size_t nmemb, size_t size, const gc_type_info_t *type_info) {
+    void *p = gc_calloc(nmemb, size);
+    if (p) {
+        gc_block_t *blk = gc_find_block(p);
+        if (blk) blk->type_info = type_info;
+    }
+    return p;
+}
+
 void* gc_malloc(size_t size) {
     if (!gc_initialized) gc_init();
     size = align_up(size, GC_ALIGNMENT);
