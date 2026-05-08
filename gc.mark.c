@@ -69,8 +69,6 @@ extern void gc_os_free(void *ptr, size_t size_hint);
 extern _Thread_local gc_thread_info_t *gc_tls_self_info;
 #endif // GC_MULTITHREAD
 
-extern gc_block_t* gc_find_block(void *ptr);
-
 /* Special type descriptor for blocks that are plain pointer arrays.
    Declared in gc.h, defined here. */
 const gc_type_info_t GC_TYPE_PTR_ARRAY = {
@@ -98,8 +96,8 @@ static void gc_scan_region(void *start, void *end) {
         uintptr_t val = *p;
         if (val < 0x1000) continue;          // null or very low address
         void *candidate = (void*)val;
-        /* Single traversal: gc_find_block returns NULL if not managed */
-        gc_block_t *blk = gc_find_block(candidate);
+        /* Single traversal: gc_find_block_by_ptr returns NULL if not managed */
+        gc_block_t *blk = gc_find_block_by_ptr(candidate);
         if (blk && !blk->marked) {
             blk->marked = true;
             gc_scan_block_content(blk);
@@ -120,7 +118,7 @@ static void gc_scan_block_content(gc_block_t *blk) {
                 uintptr_t val = *p;
                 if (val < 0x1000) continue;
                 void *candidate = (void*)val;
-                gc_block_t *target = gc_find_block(candidate);
+                gc_block_t *target = gc_find_block_by_ptr(candidate);
                 if (target && !target->marked) {
                     target->marked = true;
                     gc_scan_block_content(target);   // recursion
@@ -139,7 +137,7 @@ static void gc_scan_block_content(gc_block_t *blk) {
                     void **pp = (void**)(elem + off);
                     void *cand = *pp;
                     if (!cand) continue;
-                    gc_block_t *target = gc_find_block(cand);
+                    gc_block_t *target = gc_find_block_by_ptr(cand);
                     if (target && !target->marked) {
                         target->marked = true;
                         gc_scan_block_content(target);
@@ -172,7 +170,7 @@ static void gc_mark_root_subtree(gc_root_t *root) {
 
         void *ptr = *(node->ptr_addr);
         if (ptr) {
-            gc_block_t *blk = gc_find_block(ptr);
+            gc_block_t *blk = gc_find_block_by_ptr(ptr);
             if (blk && !blk->marked) {
                 blk->marked = true;
                 gc_scan_block_content(blk);
@@ -202,7 +200,7 @@ void gc_mark(void) {
         for (void **p = begin; p < end; p++) {
             void *cand = *p;
             if (!cand) continue;
-            gc_block_t *blk = gc_find_block(cand);
+            gc_block_t *blk = gc_find_block_by_ptr(cand);
             if (blk && !blk->marked) {
                 blk->marked = true;
                 gc_scan_block_content(blk);
@@ -290,7 +288,7 @@ static void gc_scan_block_content_incremental(gc_block_t *blk) {
                 uintptr_t val = *p;
                 if (val < 0x1000) continue;
                 void *candidate = (void*)val;
-                gc_block_t *target = gc_find_block(candidate);
+                gc_block_t *target = gc_find_block_by_ptr(candidate);
                 if (target) gc_mark_object(target);   // only mark, no recursion
             }
         } else {
@@ -306,7 +304,7 @@ static void gc_scan_block_content_incremental(gc_block_t *blk) {
                     void **pp = (void**)(elem + off);
                     void *cand = *pp;
                     if (!cand) continue;
-                    gc_block_t *target = gc_find_block(cand);
+                    gc_block_t *target = gc_find_block_by_ptr(cand);
                     if (target) gc_mark_object(target);
                 }
             }
@@ -319,7 +317,7 @@ static void gc_scan_block_content_incremental(gc_block_t *blk) {
             uintptr_t val = *p;
             if (val < 0x1000) continue;
             void *candidate = (void*)val;
-            gc_block_t *target = gc_find_block(candidate);
+            gc_block_t *target = gc_find_block_by_ptr(candidate);
             if (target) gc_mark_object(target);
         }
     }
@@ -362,7 +360,7 @@ void gc_mark_roots(void) {
 #define MARK_IF_MANAGED(ptr) do {               \
         void *cand = (ptr);                     \
         if (cand) {                             \
-            gc_block_t *blk = gc_find_block(cand); \
+            gc_block_t *blk = gc_find_block_by_ptr(cand); \
             if (blk) gc_mark_object(blk);       \
         }                                       \
     } while(0)
@@ -455,12 +453,12 @@ void gc_mark_roots(void) {
 void gc_write_barrier(void *container, void *val) {
     if (gc_phase != GC_PHASE_MARKING) return;
 
-    gc_block_t *container_blk = gc_find_block(container);
+    gc_block_t *container_blk = gc_find_block_by_ptr(container);
     if (!container_blk || !container_blk->marked) {
         return;   // container not black, no further processing needed
     }
 
-    gc_block_t *val_blk = gc_find_block(val);
+    gc_block_t *val_blk = gc_find_block_by_ptr(val);
     if (!val_blk || val_blk->marked) return;
 
     LOG_DEBUG("write barrier: marking container object %p (white object %p to be assigned)", container, val);

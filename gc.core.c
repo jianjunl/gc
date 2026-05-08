@@ -69,28 +69,16 @@ static inline size_t align_up(size_t size, size_t align) {
     return (size + align - 1) & ~(align - 1);
 }
 
-extern gc_block_t* gc_find_block(void *ptr);
-
 /* ---------- Allocation functions ---------- */
+inline void* gc_malloc(size_t size) {
+    return gc_typed_malloc(size, NULL);
+}
+
+inline void* gc_calloc(size_t nmemb, size_t size) {
+    return gc_typed_calloc(nmemb, size, NULL);
+}
+
 void* gc_typed_malloc(size_t size, const gc_type_info_t *type_info) {
-    void *p = gc_malloc(size);   /* gc_malloc sets type_info = NULL */
-    if (p) {
-        gc_block_t *blk = gc_find_block(p);
-        if (blk) blk->type_info = type_info;
-    }
-    return p;
-}
-
-void* gc_typed_calloc(size_t nmemb, size_t size, const gc_type_info_t *type_info) {
-    void *p = gc_calloc(nmemb, size);
-    if (p) {
-        gc_block_t *blk = gc_find_block(p);
-        if (blk) blk->type_info = type_info;
-    }
-    return p;
-}
-
-void* gc_malloc(size_t size) {
     if (!gc_initialized) gc_init();
     size = align_up(size, GC_ALIGNMENT);
     if (size == 0) size = GC_ALIGNMENT;
@@ -116,27 +104,28 @@ void* gc_malloc(size_t size) {
     gc_block_t *blk = malloc(sizeof(gc_block_t));
     if (!blk) { gc_os_free(user_ptr, size); return NULL; }
 
-    blk->type_info = NULL;
-    blk->ptr    = user_ptr;
-    blk->size   = size;
-    blk->marked = false;
+    blk->type_info = type_info;
+    blk->ptr       = user_ptr;
+    blk->size      = size;
+    blk->marked    = false;
 #if GC_INCREMENTAL
-    blk->marked = (gc_phase != GC_PHASE_IDLE);
+    blk->marked    = (gc_phase != GC_PHASE_IDLE);
 #endif // GC_INCREMENTAL
-    blk->next   = gc_blocks;
-    gc_blocks   = blk;
-    gc_allocated += size;
+    blk->next      = gc_blocks;
+    gc_blocks      = blk;
+    gc_allocated  += size;
     LOG_DEBUG("allocated block %p (user %p) size %zu, total allocated %zu", blk, user_ptr, size, gc_allocated);
+    gc_hash_insert(user_ptr, blk);
     return user_ptr;
 }
 
-void* gc_calloc(size_t nmemb, size_t size) {
+void* gc_typed_calloc(size_t nmemb, size_t size, const gc_type_info_t *type_info) {
     size_t total = nmemb * size;
     if (nmemb != 0 && total / nmemb != size) {
         LOG_DEBUG("calloc overflow: %zu * %zu", nmemb, size);
         return NULL;
     }
-    void *ptr = gc_malloc(total);
+    void *ptr = gc_typed_malloc(total, type_info);
     if (ptr) memset(ptr, 0, total);
     return ptr;
 }
