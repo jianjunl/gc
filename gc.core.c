@@ -248,3 +248,10 @@ void gc_dump_stats(void) {
     LOG_NOTE("[GC] allocated: %zu bytes, %zu blocks, threshold: %zu bytes",
             gc_allocated, block_count, gc_threshold);
 }
+
+void gc_log_ti(const char *name, gc_type_info_t *ti) {
+    LOG_NOTE("%s->object_size=%ld", name, ti->object_size);
+    LOG_NOTE("%s->n_offsets=%ld", name, ti->n_offsets);
+    for (size_t i = 0; i < ti->n_offsets; i++)
+        LOG_NOTE("%s->offsets[%ld]=%ld", name, i, ti->offsets[i]);
+}

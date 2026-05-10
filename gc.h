@@ -32,11 +32,11 @@ extern "C" {
 #endif
 
 #ifndef GC_OPT_INCREMENTAL
-#define GC_OPT_INCREMENTAL 1 /* set to 1 to enable incremental marking */
+#define GC_OPT_INCREMENTAL 0 /* set to 1 to enable incremental marking */
 #endif
 
 #ifndef GC_OPT_FINALIZING
-#define GC_OPT_FINALIZING  1 /* set to 0 to disable finalizers & weak refs */
+#define GC_OPT_FINALIZING  0 /* set to 0 to disable finalizers & weak refs */
 #endif
 
 #ifndef GC_OPT_FREELIST
@@ -262,6 +262,9 @@ typedef struct gc_type_info {
     ssize_t offsets[];          /* flexible array, n_offsets elements */
 } gc_type_info_t;
 
+void gc_log_ti(const char *name, gc_type_info_t *ti);
+#define GC_LOG_TI(name) gc_log_ti(#name, &name)
+
 /* Special type descriptor for blocks that are plain pointer arrays. */
 extern const gc_type_info_t GC_TYPE_PTR_ARRAY;
 
@@ -366,8 +369,7 @@ void* gc_typed_calloc(size_t nmemb, size_t size, const gc_type_info_t *type_info
 
 /* Place a global pointer variable in a dedicated section so the GC can
    automatically treat it as a root – no explicit add_root() needed. */
-#define GC_GLOBAL(type, name) \
-    type * name __attribute__((section("gc_roots"))) = NULL
+#define GC_GLOBAL(type, name) type * name __attribute__((section("gc_roots"))) = NULL
 #define GC_GLOBAL1(type, x)      GC_GLOBAL(type, x)
 #define GC_GLOBAL2(type, x, ...) GC_GLOBAL(type, x);GC_GLOBAL1(type, __VA_ARGS__)
 #define GC_GLOBAL3(type, x, ...) GC_GLOBAL(type, x);GC_GLOBAL2(type, __VA_ARGS__)
