@@ -255,11 +255,3 @@ inline int gc_pthread_cond_init(gc_cond_t **cond, const pthread_condattr_t *attr
 }
 
 #endif // GC_MULTITHREAD
-
-inline char *gc_strdup(const char *src) {
-    size_t len = strlen(src) + 1;
-    char *dst = gc_malloc(len);
-    if (dst == NULL) return NULL;
-    memcpy(dst, src, len);
-    return dst;
-}

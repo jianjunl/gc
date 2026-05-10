@@ -249,6 +249,14 @@ void gc_dump_stats(void) {
             gc_allocated, block_count, gc_threshold);
 }
 
+inline char *gc_strdup(const char *src) {
+    size_t len = strlen(src) + 1;
+    char *dst = gc_malloc(len);
+    if (dst == NULL) return NULL;
+    memcpy(dst, src, len);
+    return dst;
+}
+
 void gc_log_ti(const char *name, gc_type_info_t *ti) {
     LOG_NOTE("%s->object_size=%ld", name, ti->object_size);
     LOG_NOTE("%s->n_offsets=%ld", name, ti->n_offsets);
