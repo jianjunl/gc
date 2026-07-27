@@ -115,7 +115,7 @@ void* gc_typed_malloc(size_t size, const gc_type_info_t *type_info) {
     gc_blocks      = blk;
     gc_allocated  += size;
     LOG_DEBUG("allocated block %p (user %p) size %zu, total allocated %zu", blk, user_ptr, size, gc_allocated);
-    gc_hash_insert(user_ptr, blk);
+    gc_block_insert(user_ptr, blk);
     return user_ptr;
 }
 
@@ -130,13 +130,61 @@ void* gc_typed_calloc(size_t nmemb, size_t size, const gc_type_info_t *type_info
     return ptr;
 }
 
+/*
+static bool remove_block_from_list(gc_block_t *blk) {
+    gc_block_t *prev = NULL;
+    for (gc_block_t *cur = gc_blocks; cur; prev = cur, cur = cur->next) {
+        if (cur == blk) {
+            if (prev)
+                prev->next = cur->next;
+            else
+                gc_blocks = cur->next;
+            return true;
+        }
+    }
+    return false;
+}
+
+void gc_free(void *ptr) {
+    if (ptr == NULL) return;
+
+    static gc_mutex_t free_mutex = GC_PTHREAD_MUTEX_INITIALIZER;
+    gc_pthread_mutex_lock(&free_mutex);
+
+    gc_block_t *blk = gc_find_block(ptr);
+    if (blk == NULL) {
+        gc_pthread_mutex_unlock(&free_mutex);
+        return;
+    }
+
+    if (blk->ptr != ptr) {
+        gc_pthread_mutex_unlock(&free_mutex);
+        return;
+    }
+
+    if (!remove_block_from_list(blk)) {
+        gc_pthread_mutex_unlock(&free_mutex);
+        return;
+    }
+
+    gc_block_remove(ptr);
+
+    gc_allocated -= blk->size;
+
+    gc_os_free(blk->ptr, blk->size);
+    free(blk);
+
+    gc_pthread_mutex_unlock(&free_mutex);
+}
+*/
+///*
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdiscarded-qualifiers"
 void gc_free(void *ptr) {
     (void)ptr; // conservative GC does not free immediately
 }
 #pragma GCC diagnostic pop
-
+//*/
 extern void gc_sweep(void);
 #if GC_MULTITHREAD
 extern volatile int  gc_stw_suspended_count;

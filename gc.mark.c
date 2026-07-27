@@ -96,9 +96,10 @@ static void gc_scan_region(void *start, void *end) {
         uintptr_t val = *p;
         if (val < 0x1000) continue;          // null or very low address
         void *candidate = (void*)val;
-        /* Single traversal: gc_find_block_by_ptr returns NULL if not managed */
-        gc_block_t *blk = gc_find_block_by_ptr(candidate);
+        /* Single traversal: gc_find_block returns NULL if not managed */
+        gc_block_t *blk = gc_find_block(candidate);
         if (blk && !blk->marked) {
+            LOG_DEBUG("found pointer %p at address %p, marking block %p", candidate, p, blk);
             blk->marked = true;
             gc_scan_block_content(blk);
         }
@@ -118,7 +119,7 @@ static void gc_scan_block_content(gc_block_t *blk) {
                 uintptr_t val = *p;
                 if (val < 0x1000) continue;
                 void *candidate = (void*)val;
-                gc_block_t *target = gc_find_block_by_ptr(candidate);
+                gc_block_t *target = gc_find_block(candidate);
                 if (target && !target->marked) {
                     target->marked = true;
                     gc_scan_block_content(target);   // recursion
@@ -137,7 +138,7 @@ static void gc_scan_block_content(gc_block_t *blk) {
                     void **pp = (void**)(elem + off);
                     void *cand = *pp;
                     if (!cand) continue;
-                    gc_block_t *target = gc_find_block_by_ptr(cand);
+                    gc_block_t *target = gc_find_block(cand);
                     if (target && !target->marked) {
                         target->marked = true;
                         gc_scan_block_content(target);
@@ -148,43 +149,6 @@ static void gc_scan_block_content(gc_block_t *blk) {
     } else {
         /* ---- Conservative fallback ---- */
         gc_scan_region(blk->ptr, (char*)blk->ptr + blk->size);
-    }
-}
-
-/*
- * gc_mark_root_subtree – Mark every pointer reachable from the tree
- * rooted at `root` (including all descendants).  Uses the `prev` field
- * as an explicit stack, leaving it modified but never depended on
- * after return.
- */
-static void gc_mark_root_subtree(gc_root_t *root) {
-    gc_root_t *stack = NULL;
-
-    /* push root */
-    root->prev = NULL;
-    stack = root;
-
-    while (stack) {
-        gc_root_t *node = stack;
-        stack = node->prev;         /* pop */
-
-        void *ptr = *(node->ptr_addr);
-        if (ptr) {
-            gc_block_t *blk = gc_find_block_by_ptr(ptr);
-            if (blk && !blk->marked) {
-                blk->marked = true;
-                gc_scan_block_content(blk);
-            }
-        }
-
-        /* Push all children (any order) */
-        gc_root_t *child = node->more;
-        while (child) {
-            gc_root_t *next_child = child->next;
-            child->prev = stack;
-            stack = child;
-            child = next_child;
-        }
     }
 }
 
@@ -200,7 +164,7 @@ void gc_mark(void) {
         for (void **p = begin; p < end; p++) {
             void *cand = *p;
             if (!cand) continue;
-            gc_block_t *blk = gc_find_block_by_ptr(cand);
+            gc_block_t *blk = gc_find_block(cand);
             if (blk && !blk->marked) {
                 blk->marked = true;
                 gc_scan_block_content(blk);
@@ -243,8 +207,19 @@ void gc_mark(void) {
     pthread_mutex_unlock(&gc_threads_lock);
 
     pthread_mutex_lock(&gc_roots_lock);
-    for (gc_root_t *r = gc_roots; r; r = r->next)
-        gc_mark_root_subtree(r);
+    for (gc_root_t *r = gc_roots; r; r = r->next) {
+        void **ptr_addr = r->ptr_addr;
+        if (ptr_addr) {
+            void *ptr = *ptr_addr;
+            if (ptr) {
+                gc_block_t *blk = gc_find_block(ptr);
+                if (blk && !blk->marked) {
+                    blk->marked = true;
+                    gc_scan_block_content(blk);
+                }
+            }
+        }
+    }
     pthread_mutex_unlock(&gc_roots_lock);
 
     LOG_DEBUG("mark phase finished");
@@ -288,7 +263,7 @@ static void gc_scan_block_content_incremental(gc_block_t *blk) {
                 uintptr_t val = *p;
                 if (val < 0x1000) continue;
                 void *candidate = (void*)val;
-                gc_block_t *target = gc_find_block_by_ptr(candidate);
+                gc_block_t *target = gc_find_block(candidate);
                 if (target) gc_mark_object(target);   // only mark, no recursion
             }
         } else {
@@ -304,7 +279,7 @@ static void gc_scan_block_content_incremental(gc_block_t *blk) {
                     void **pp = (void**)(elem + off);
                     void *cand = *pp;
                     if (!cand) continue;
-                    gc_block_t *target = gc_find_block_by_ptr(cand);
+                    gc_block_t *target = gc_find_block(cand);
                     if (target) gc_mark_object(target);
                 }
             }
@@ -317,7 +292,7 @@ static void gc_scan_block_content_incremental(gc_block_t *blk) {
             uintptr_t val = *p;
             if (val < 0x1000) continue;
             void *candidate = (void*)val;
-            gc_block_t *target = gc_find_block_by_ptr(candidate);
+            gc_block_t *target = gc_find_block(candidate);
             if (target) gc_mark_object(target);
         }
     }
@@ -360,7 +335,7 @@ void gc_mark_roots(void) {
 #define MARK_IF_MANAGED(ptr) do {               \
         void *cand = (ptr);                     \
         if (cand) {                             \
-            gc_block_t *blk = gc_find_block_by_ptr(cand); \
+            gc_block_t *blk = gc_find_block(cand); \
             if (blk) gc_mark_object(blk);       \
         }                                       \
     } while(0)
@@ -425,19 +400,12 @@ void gc_mark_roots(void) {
     /* Precise roots */
     pthread_mutex_lock(&gc_roots_lock);
     for (gc_root_t *r = gc_roots; r; r = r->next) {
-        gc_root_t *stack = NULL;
-        r->prev = NULL;
-        stack = r;
-        while (stack) {
-            gc_root_t *node = stack;
-            stack = node->prev;
-            MARK_IF_MANAGED(*(node->ptr_addr));
-            gc_root_t *child = node->more;
-            while (child) {
-                gc_root_t *next_child = child->next;
-                child->prev = stack;
-                stack = child;
-                child = next_child;
+        void **ptr_addr = r->ptr_addr;
+        if (ptr_addr) {
+            void *ptr = *ptr_addr;
+            if (ptr) {
+                gc_block_t *blk = gc_find_block(ptr);
+                if (blk) gc_mark_object(blk);   // note: using gc_mark_object insteadof marking
             }
         }
     }
@@ -453,12 +421,12 @@ void gc_mark_roots(void) {
 void gc_write_barrier(void *container, void *val) {
     if (gc_phase != GC_PHASE_MARKING) return;
 
-    gc_block_t *container_blk = gc_find_block_by_ptr(container);
+    gc_block_t *container_blk = gc_find_block(container);
     if (!container_blk || !container_blk->marked) {
         return;   // container not black, no further processing needed
     }
 
-    gc_block_t *val_blk = gc_find_block_by_ptr(val);
+    gc_block_t *val_blk = gc_find_block(val);
     if (!val_blk || val_blk->marked) return;
 
     LOG_DEBUG("write barrier: marking container object %p (white object %p to be assigned)", container, val);

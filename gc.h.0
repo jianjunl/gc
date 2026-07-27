@@ -28,7 +28,7 @@ extern "C" {
  * Configuration Macros (define before including this header)
  * ------------------------------------------------------------------------- */
 #ifndef GC_OPT_MULTITHREAD
-#define GC_OPT_MULTITHREAD 1 /* set to 0 to disable multi-threading */
+#define GC_OPT_MULTITHREAD 0 /* set to 0 to disable multi-threading */
 #endif
 
 #ifndef GC_OPT_INCREMENTAL
@@ -100,8 +100,8 @@ void gc_dump_stats(void);
  * if the total allocation exceeds the internal threshold.
  */
 void* gc_malloc(size_t size);
-
 char* gc_strdup(const char *src);
+void **gc_root_malloc(size_t size);
 
 /*
  * gc_calloc - Allocate and zero-initialize an array.
@@ -137,20 +137,6 @@ void gc_free(void *ptr);
  */
 void gc_collect(void);
 
-/* ---------------------------------------------------------------------
- * Pointer validation hook – for NaN boxing and similar techniques.
- *
- * Given a candidate pointer (possibly a boxed value) read from memory,
- * returns the true heap pointer if it represents a valid heap object,
- * otherwise returns NULL. The default implementation returns the pointer
- * unchanged (suitable for non‑boxing scenarios).
- * --------------------------------------------------------------------- */
-typedef void* (*gc_validate_fn)(void *ptr);
-extern gc_validate_fn gc_validate_hook;
-
-/* Set the validation hook (thread‑safe; should be called once at startup). */
-void gc_set_validate_hook(gc_validate_fn fn);
-
 /* ============================================================================
  * Precise Root Registration
  * ============================================================================ */
@@ -179,38 +165,89 @@ void gc_add_root(void *ptr_addr);
 void gc_remove_root(void *ptr_addr);
 
 /*
- * GC_ROOT_AUTO - Declare an automatically‑registered root.
+ * gc_root_add - Register a precise root, optionally as a child of another root.
+ *
+ * @parent: address of a pointer variable that is already a root (e.g., &my_ptr).
+ *          Must NOT be NULL (calling with NULL is a fatal error).
+ * @child:  address of a pointer variable to protect.  If NULL, the function
+ *          behaves like the original gc_add_root(parent), i.e., it simply
+ *          registers @parent as an independent root.
+ *
+ * When @child is non‑NULL, the function traverses the entire root tree looking
+ * for nodes whose stored pointer value equals @parent.  For each such node,
+ * a new root node for @child is created and inserted as the first child of
+ * that parent.  If no parent node is found, @child is added as a top‑level
+ * root.  This allows automatic protection of fields inside a structure already
+ * reachable through an existing root.
+ */
+void gc_root_add(void *parent, void *child);
+
+/*
+ * gc_root_add_bulk - Register many contiguous pointer variables at once.
+ *
+ * @base:   address of the first pointer element (e.g., &array[0]).
+ * @nmemb:  number of elements.
+ * @size:   size of each element (usually sizeof(void*) or sizeof(array[0])).
+ *
+ * If a root node for @base already exists, its old children (if any) are freed
+ * and replaced by the new list.  Otherwise a new top‑level root for @base is
+ * created and populated with @nmemb child nodes.  This is the preferred way to
+ * protect an array of pointers.
+ */
+void gc_root_add_bulk(void *base, size_t nmemb, size_t size);
+
+/*
+ * gc_root_assign - Replace an existing root pointer address and discard its children.
+ *
+ * @old: current pointer variable address that is a root.
+ * @new: new pointer variable address to replace @old.
+ *
+ * Traverses the entire root tree.  Every node whose ptr_addr equals @old
+ * has its ptr_addr set to @new and its entire subtree of children (the
+ * ->more chain) is freed.  This is useful when the root variable moves
+ * (e.g., after realloc) or when a structure is replaced and the old
+ * internal references are no longer needed.
+ */
+void gc_root_assign(void *old, void *new);
+
+/*
+ * GC_NEW -  declare ptr for stack-allocated precise roots.
  *
  * Usage:
- *   GC_ROOT_AUTO(my_ptr);
- *   GC_ROOT(node_t, my_list) = gc_malloc(sizeof(node_t));
+ *   GC_ADD(&my_ptr);
+ *   GC_NEW(node_t, my_list) = gc_malloc(sizeof(node_t));
  *
  * This declares a pointer variable named 'my_list' of type 'node_t*',
  * automatically registers it as a root, and arranges for it to be
  * unregistered when the variable goes out of scope (using GCC's cleanup
  * attribute). Requires GCC or Clang.
  */
-#define CONCAT_IMPL(x, y) x##y
-#define CONCAT(x, y) CONCAT_IMPL(x, y)
-
-#define GC_ROOT_AUTO(var) \
-    void* CONCAT(__gc_auto_root_, __COUNTER__) __attribute__((cleanup(gc_auto_root_cleanup))) = (void*)&(var); \
-    gc_add_root(&(var))
-
-#define GC_ROOT(type, ptr) \
-    type * ptr = NULL; GC_ROOT_AUTO(ptr); \
-    ptr
+///*
+#define GC_ROOT(ptraddr) do { \
+    void * __gc_root_ptr __attribute__((cleanup(gc_root_cleanup))) = ptraddr; \
+    gc_add_root(__gc_root_ptr); \
+} while(0)
+//*/
+//#define GC_ROOT2(ptraddr) gc_add_root(ptraddr)
+//#define GC_ROOT(ptraddr)
 
 #define GC_NEW(type, ptr) \
-    type * ptr __attribute__((cleanup(gc_root_cleanup))) = NULL; \
-    gc_add_root(&ptr); \
+    type * ptr = NULL; GC_ROOT(&ptr); \
     ptr
 
 /* Internal helper for GC_ROOT; do not call directly. */
-void gc_root_cleanup(void *ptraddr);
+void gc_root_cleanup(void **ptr_addr);
 
-/* Internal helper for GC_ROOT; do not call directly. */
-void gc_auto_root_cleanup(void **ptr);
+#define GC_MALLOC_ROOT(ptr, type) GC_ROOT(type, ptr) = gc_malloc(sizeof(type))
+#define GC_CALLOC_ROOT(ptr, nmemb, type) GC_ROOT(type, ptr) = gc_calloc(nmemb, sizeof(type))
+
+#define GC_FREE_ROOT(ptr) do { \
+    if (ptr) { \
+        gc_remove_root(&(ptr)); \
+        (ptr) = NULL; \
+    } \
+} while(0)
+
 
 /* ------------------------------------------------------------------------
  * Typed allocation support

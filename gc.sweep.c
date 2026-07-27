@@ -27,7 +27,6 @@ typedef struct gc_finalizer gc_finalizer_t;
 #include "gc.block.h"
 
 extern void gc_os_free(void *ptr, size_t size_hint);
-
 extern gc_block_t *gc_blocks;
 
 extern size_t      gc_allocated;
@@ -64,7 +63,7 @@ struct gc_finalizer {
 
 gc_weak_ref_t* gc_make_weak(void *obj, void (*on_clear)(void*, void*), void *user_data) {
     if (!obj) return NULL;
-    gc_block_t *blk = gc_find_block_by_ptr(obj);
+    gc_block_t *blk = gc_find_block(obj);
     if (!blk) return NULL;
     gc_weak_ref_t *ref = malloc(sizeof(gc_weak_ref_t));
     if (!ref) return NULL;
@@ -132,7 +131,7 @@ static void gc_clear_weak_refs_for_block(gc_block_t *blk) {
 // ---------- Finalizer API ---------- //
 void gc_register_finalizer(void *obj, void (*finalizer)(void*, void*), void *user_data) {
     if (!obj || !finalizer) return;
-    gc_block_t *blk = gc_find_block_by_ptr(obj);
+    gc_block_t *blk = gc_find_block(obj);
     if (!blk) return;
     gc_finalizer_t *fin = malloc(sizeof(struct gc_finalizer));
     if (!fin) return;
@@ -168,7 +167,7 @@ void gc_sweep(void) {
                 gc_clear_weak_refs_for_block(curr);
             }
             gc_os_free(curr->ptr, curr->size);
-            gc_hash_remove(curr->ptr);
+            gc_block_remove(curr->ptr);
             gc_allocated -= curr->size;
             freed += curr->size;
             freed_blocks++;
@@ -195,7 +194,6 @@ void gc_sweep(void) {
 #if GC_INCREMENTAL
     gc_gray_blocks = NULL;
 #endif // GC_INCREMENTAL
-}
 
 #else // GC_FINALIZING
 
@@ -206,7 +204,7 @@ void gc_sweep(void) {
     while (curr) {
         if (!curr->marked) {
             gc_os_free(curr->ptr, curr->size);
-            gc_hash_remove(curr->ptr);
+            gc_block_remove(curr->ptr);
             gc_allocated -= curr->size;
             freed += curr->size;
             freed_blocks++;

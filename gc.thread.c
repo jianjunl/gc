@@ -156,8 +156,8 @@ int gc_pthread_mutex_init(gc_mutex_t **mutex, const pthread_mutexattr_t *attr) {
     int ret = pthread_mutex_init(&m->lock, attr);
     if (ret != 0) return ret;
     gc_register_finalizer(m, gc_mutex_finalizer, NULL);
-    gc_add_root(mutex);            // protect the mutex structure pointer
-    gc_add_root(&m->lock);         // protect the inner pthread_mutex_t
+    //gc_add_root(mutex);            // protect the mutex structure pointer
+    //gc_add_root(&m->lock);         // protect the inner pthread_mutex_t
     *mutex = m;
     return 0;
 }
@@ -175,8 +175,8 @@ int gc_pthread_mutex_unlock(gc_mutex_t *mutex) {
 int gc_pthread_mutex_destroy(gc_mutex_t *mutex) {
     if (!mutex) return EINVAL;
     int ret = pthread_mutex_destroy(&mutex->lock);
-    gc_remove_root(&mutex->lock);
-    gc_remove_root(&mutex);        // note: argument is &mutex, the caller's pointer variable
+    //gc_remove_root(&mutex->lock);
+    //gc_remove_root(&mutex);        // note: argument is &mutex, the caller's pointer variable
     LOG_DEBUG("explicit destroy mutex %p", mutex);
     return ret;
 }
@@ -187,8 +187,8 @@ int gc_pthread_cond_init(gc_cond_t **cond, const pthread_condattr_t *attr) {
     int ret = pthread_cond_init(&c->cond, attr);
     if (ret != 0) return ret;
     gc_register_finalizer(c, gc_cond_finalizer, NULL);
-    gc_add_root(cond);
-    gc_add_root(&c->cond);
+    //gc_add_root(cond);
+    //gc_add_root(&c->cond);
     *cond = c;
     return 0;
 }
@@ -211,8 +211,8 @@ int gc_pthread_cond_broadcast(gc_cond_t *cond) {
 int gc_pthread_cond_destroy(gc_cond_t *cond) {
     if (!cond) return EINVAL;
     int ret = pthread_cond_destroy(&cond->cond);
-    gc_remove_root(&cond->cond);
-    gc_remove_root(&cond);
+    //gc_remove_root(&cond->cond);
+    //gc_remove_root(&cond);
     return ret;
 }
 
@@ -221,17 +221,13 @@ int gc_pthread_cond_destroy(gc_cond_t *cond) {
 inline int gc_pthread_mutex_init(gc_mutex_t **mutex, const pthread_mutexattr_t *attr) {
     *mutex = gc_malloc(sizeof(gc_mutex_t));
     if (!*mutex) return ENOMEM;
-    int ret = pthread_mutex_init(*mutex, attr);
-    if (ret != 0) return ret;
-    return 0;
+    return pthread_mutex_init(*mutex, attr);
 }
 
 inline int gc_pthread_cond_init(gc_cond_t **cond, const pthread_condattr_t *attr) {
     *cond = gc_malloc(sizeof(gc_cond_t));
     if (!*cond) return ENOMEM;
-    int ret = pthread_cond_init(*cond, attr);
-    if (ret != 0) return ret;
-    return 0;
+    return pthread_cond_init(*cond, attr);
 }
 
 #endif // GC_FINALIZING
@@ -241,17 +237,13 @@ inline int gc_pthread_cond_init(gc_cond_t **cond, const pthread_condattr_t *attr
 inline int gc_pthread_mutex_init(gc_mutex_t **mutex, const pthread_mutexattr_t *attr) {
     *mutex = gc_malloc(sizeof(gc_mutex_t));
     if (!*mutex) return ENOMEM;
-    int ret = pthread_mutex_init(*mutex, attr);
-    if (ret != 0) return ret;
-    return 0;
+    return pthread_mutex_init(*mutex, attr);
 }
 
 inline int gc_pthread_cond_init(gc_cond_t **cond, const pthread_condattr_t *attr) {
     *cond = gc_malloc(sizeof(gc_cond_t));
     if (!*cond) return ENOMEM;
-    int ret = pthread_cond_init(*cond, attr);
-    if (ret != 0) return ret;
-    return 0;
+    return pthread_cond_init(*cond, attr);
 }
 
 #endif // GC_MULTITHREAD

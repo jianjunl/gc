@@ -23,8 +23,10 @@ MANDIR   = $(DESTDIR)$(PREFIX)/share/man/man3
 
 # Files
 HEADERS   = gc.h
-SOURCES   = gc.core.c gc.init.c gc.block.c gc.mark.c gc.sweep.c gc.os.c gc.root.c gc.stw.c gc.thread.c gc.throw.c
-OBJECTS   = gc.core.o gc.init.o gc.block.o gc.mark.o gc.sweep.o gc.os.o gc.root.o gc.stw.o gc.thread.o gc.throw.o
+SOURCES   = gc.core.c gc.init.c gc.block.c gc.mark.c gc.sweep.c gc.os.c gc.root.c gc.stw.c gc.thread.c gc.throw.c \
+            art/artmap.c robin/rapidhash.c robin/robin_table.c robin/siphash.c robin/xxh64.c
+OBJECTS   = gc.core.o gc.init.o gc.block.o gc.mark.o gc.sweep.o gc.os.o gc.root.o gc.stw.o gc.thread.o gc.throw.o \
+            art/artmap.o robin/rapidhash.o robin/robin_table.o robin/siphash.o robin/xxh64.o
 LIB_STATIC = libgc.a
 LIB_SHARED = libgc.so
 TEST_SRC  = gc.test.c
